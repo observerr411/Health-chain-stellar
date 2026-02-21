@@ -2,16 +2,21 @@ import {
   Injectable,
   UnauthorizedException,
   ConflictException,
+  Inject,
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
 import { JwtPayload } from './jwt.strategy';
+import Redis from 'ioredis';
+import { REDIS_CLIENT } from '../redis/redis.constants';
+import { randomBytes } from 'crypto';
 
 @Injectable()
 export class AuthService {
   constructor(
     private readonly jwtService: JwtService,
     private readonly configService: ConfigService,
+    @Inject(REDIS_CLIENT) private readonly redis: Redis,
   ) {}
 
   async validateUser(email: string, password: string): Promise<unknown> {
@@ -30,17 +35,7 @@ export class AuthService {
     };
 
     const accessToken = this.jwtService.sign(payload as unknown as Record<string, unknown>);
-    const refreshRefreshExpiresIn =
-      this.configService.get<string>('JWT_REFRESH_EXPIRES_IN') ?? '7d';
-    const refreshToken = this.jwtService.sign(
-      payload as unknown as Record<string, unknown>,
-      {
-        secret:
-          this.configService.get<string>('JWT_REFRESH_SECRET') ?? 'refresh-secret',
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        expiresIn: refreshRefreshExpiresIn as any,
-      },
-    );
+    const refreshToken = await this.generateRefreshToken(payload);
 
     return {
       access_token: accessToken,
@@ -68,18 +63,51 @@ export class AuthService {
         ),
       });
 
+      // Atomic consumption using Redis SET NX
+      const tokenKey = `refresh_token:${refreshToken}`;
+      const consumed = await this.redis.set(tokenKey, '1', 'EX', 604800, 'NX');
+
+      if (!consumed) {
+        throw new UnauthorizedException('INVALID_REFRESH_TOKEN');
+      }
+
       const newPayload: JwtPayload = {
         sub: payload.sub,
         email: payload.email,
         role: payload.role,
       };
 
+      const newAccessToken = this.jwtService.sign(newPayload);
+      const newRefreshToken = await this.generateRefreshToken(newPayload);
+
       return {
-        access_token: this.jwtService.sign(newPayload),
+        access_token: newAccessToken,
+        refresh_token: newRefreshToken,
       };
-    } catch {
+    } catch (error) {
+      if (error instanceof UnauthorizedException) {
+        throw error;
+      }
       throw new UnauthorizedException('Invalid or expired refresh token');
     }
+  }
+
+  private async generateRefreshToken(payload: JwtPayload): Promise<string> {
+    const jti = randomBytes(16).toString('hex');
+    const refreshExpiresIn =
+      this.configService.get<string>('JWT_REFRESH_EXPIRES_IN') ?? '7d';
+    
+    const refreshToken = this.jwtService.sign(
+      { ...payload, jti } as unknown as Record<string, unknown>,
+      {
+        secret:
+          this.configService.get<string>('JWT_REFRESH_SECRET') ?? 'refresh-secret',
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        expiresIn: refreshExpiresIn as any,
+      },
+    );
+
+    return refreshToken;
   }
 
   async logout(userId: string) {
