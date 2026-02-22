@@ -3,29 +3,30 @@ import React, { Suspense } from "react";
 import { Poppins, Roboto, Manrope, DM_Sans } from "next/font/google";
 import "./globals.css";
 import { ToastProvider } from "../components/providers/ToastProvider";
+import { ReactQueryProvider } from "../components/providers/ReactQueryProvider";
 
-const poppins = Poppins({ 
-  subsets: ["latin"], 
+const poppins = Poppins({
+  subsets: ["latin"],
   weight: ["400"],
-  variable: "--font-poppins" 
+  variable: "--font-poppins",
 });
 
-const roboto = Roboto({ 
-  subsets: ["latin"], 
+const roboto = Roboto({
+  subsets: ["latin"],
   weight: ["400", "600", "700"],
-  variable: "--font-roboto" 
+  variable: "--font-roboto",
 });
 
-const manrope = Manrope({ 
-  subsets: ["latin"], 
+const manrope = Manrope({
+  subsets: ["latin"],
   weight: ["600", "700"],
-  variable: "--font-manrope" 
+  variable: "--font-manrope",
 });
 
-const dmSans = DM_Sans({ 
-  subsets: ["latin"], 
+const dmSans = DM_Sans({
+  subsets: ["latin"],
   weight: ["400", "700"],
-  variable: "--font-dm-sans" 
+  variable: "--font-dm-sans",
 });
 
 export const metadata: Metadata = {
@@ -40,11 +41,13 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en">
-      <body className={`${poppins.variable} ${roboto.variable} ${manrope.variable} ${dmSans.variable} antialiased`}>
+      <body
+        className={`${poppins.variable} ${roboto.variable} ${manrope.variable} ${dmSans.variable} antialiased`}
+      >
         <Suspense fallback={null}>
-          <ToastProvider>
-            {children}
-          </ToastProvider>
+          <ReactQueryProvider>
+            <ToastProvider>{children}</ToastProvider>
+          </ReactQueryProvider>
         </Suspense>
       </body>
     </html>

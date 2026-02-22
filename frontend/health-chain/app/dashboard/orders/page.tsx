@@ -1,28 +1,36 @@
 "use client";
 
-// OrdersPage - Main page component for Hospital Order History Dashboard
+// OrdersPage — React Query refactor
+// All data fetching via useOrders hook (React Query), zero manual fetch calls.
 
 import React, { useState, useEffect, useCallback, useRef } from "react";
-import { AlertCircle, RefreshCw } from "lucide-react";
 import {
-  Order,
   OrderFilters,
   SortConfig,
   PaginationConfig,
-  OrdersResponse,
+  OrderQueryParams,
 } from "@/lib/types/orders";
 import { URLStateManager } from "@/lib/utils/url-state-manager";
-import { WebSocketClient, ConnectionStatus } from "@/lib/utils/websocket-client";
+import {
+  WebSocketClient,
+  ConnectionStatus,
+} from "@/lib/utils/websocket-client";
 import { CSVExporter } from "@/lib/utils/csv-exporter";
 import { FilterPanel } from "@/components/orders/FilterPanel";
 import { OrderTable } from "@/components/orders/OrderTable";
 import { PaginationController } from "@/components/orders/PaginationController";
 import { ConnectionStatusIndicator } from "@/components/orders/ConnectionStatusIndicator";
+import { LoadingSpinner } from "@/components/ui/LoadingSpinner";
+import { ErrorDisplay } from "@/components/ui/ErrorDisplay";
+import { useOrders } from "@/lib/hooks/useOrders";
+import { useQueryClient } from "@tanstack/react-query";
+import { queryKeys } from "@/lib/api/queryKeys";
+
+const HOSPITAL_ID = "HOSP-001";
 
 export default function OrdersPage() {
-  const [orders, setOrders] = useState<Order[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const queryClient = useQueryClient();
+
   const [filters, setFilters] = useState<OrderFilters>({
     startDate: null,
     endDate: null,
@@ -38,15 +46,11 @@ export default function OrdersPage() {
     page: 1,
     pageSize: 25,
   });
-  const [totalCount, setTotalCount] = useState(0);
   const [wsStatus, setWsStatus] = useState<ConnectionStatus>("disconnected");
 
   const wsClientRef = useRef<WebSocketClient | null>(null);
 
-  // Track whether we are currently in a reconnecting/disconnected state
-  // so StatusBadge can show stale styling
-  const isStale = wsStatus === "reconnecting" || wsStatus === "disconnected";
-
+  // Sync state from URL on first render
   useEffect(() => {
     const urlState = URLStateManager.readFromURL();
     setFilters(urlState.filters);
@@ -57,109 +61,57 @@ export default function OrdersPage() {
     });
   }, []);
 
-  const fetchOrders = useCallback(
-    async (silent = false) => {
-      try {
-        if (!silent) {
-          setLoading(true);
-        }
-        setError(null);
+  // Build typed query params from local state
+  const queryParams: OrderQueryParams = {
+    hospitalId: HOSPITAL_ID,
+    ...filters,
+    ...sort,
+    ...pagination,
+  };
 
-        const params = new URLSearchParams();
-        params.set("hospitalId", "HOSP-001");
+  // ─── React Query ──────────────────────────────────────────────────────────
+  const { data, isLoading, isFetching, isError, error, refetch } =
+    useOrders(queryParams);
 
-        if (filters.startDate) {
-          params.set("startDate", filters.startDate.toISOString().split("T")[0]);
-        }
-        if (filters.endDate) {
-          params.set("endDate", filters.endDate.toISOString().split("T")[0]);
-        }
-        if (filters.bloodTypes.length > 0) {
-          filters.bloodTypes.forEach((bt) => params.append("bloodType", bt));
-        }
-        if (filters.statuses.length > 0) {
-          filters.statuses.forEach((s) => params.append("status", s));
-        }
-        if (filters.bloodBank) {
-          params.set("bloodBank", filters.bloodBank);
-        }
+  const orders = data?.data ?? [];
+  const totalCount = data?.pagination.totalCount ?? 0;
 
-        params.set("sortBy", sort.column);
-        params.set("sortOrder", sort.order);
-        params.set("page", pagination.page.toString());
-        params.set("pageSize", pagination.pageSize.toString());
-
-        const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:3000";
-        const apiPrefix = process.env.NEXT_PUBLIC_API_PREFIX || "api/v1";
-        const response = await fetch(
-          `${apiUrl}/${apiPrefix}/orders?${params.toString()}`,
-        );
-
-        if (!response.ok) {
-          throw new Error(`HTTP error ${response.status}`);
-        }
-
-        const data: OrdersResponse = await response.json();
-
-        const ordersWithDates = data.orders.map((order) => ({
-          ...order,
-          placedAt: new Date(order.placedAt),
-          deliveredAt: order.deliveredAt ? new Date(order.deliveredAt) : null,
-          confirmedAt: order.confirmedAt ? new Date(order.confirmedAt) : null,
-          cancelledAt: order.cancelledAt ? new Date(order.cancelledAt) : null,
-          createdAt: new Date(order.createdAt),
-          updatedAt: new Date(order.updatedAt),
-        }));
-
-        setOrders(ordersWithDates);
-        setTotalCount(data.pagination.totalCount);
-      } catch (err) {
-        console.error("Error fetching orders:", err);
-        setError(err instanceof Error ? err.message : "An unexpected error occurred");
-      } finally {
-        setLoading(false);
-      }
-    },
-    [filters, sort, pagination],
-  );
-
+  // WebSocket: real-time order updates + reconcile after reconnect
   useEffect(() => {
-    fetchOrders();
-  }, [fetchOrders]);
-
-  // WebSocket setup
-  useEffect(() => {
-    const hospitalId = "HOSP-001";
-    const wsClient = new WebSocketClient(hospitalId);
+    const wsClient = new WebSocketClient(HOSPITAL_ID);
     wsClientRef.current = wsClient;
 
-    wsClient.onConnectionChange((status) => {
-      setWsStatus(status);
-    });
+    wsClient.onConnectionChange((status) => setWsStatus(status));
 
-    // After a successful reconnect, silently re-fetch to reconcile
-    // React Query cache / local state with the current server state
+    // After reconnect, silently invalidate to pull any missed updates
     wsClient.onReconnected(() => {
-      console.log("WebSocket reconnected — reconciling order data via REST");
-      fetchOrders(true);
+      queryClient.invalidateQueries({ queryKey: queryKeys.orders.all });
     });
 
     wsClient.onOrderUpdate((updatedOrder) => {
-      setOrders((prevOrders) =>
-        prevOrders.map((order) =>
-          order.id === updatedOrder.id
-            ? {
-                ...order,
-                ...updatedOrder,
-                updatedAt: updatedOrder.updatedAt
-                  ? new Date(updatedOrder.updatedAt as unknown as string)
-                  : order.updatedAt,
-                deliveredAt: updatedOrder.deliveredAt
-                  ? new Date(updatedOrder.deliveredAt as unknown as string)
-                  : order.deliveredAt,
-              }
-            : order,
-        ),
+      // Patch the cached data in-place so the table updates without a round-trip
+      queryClient.setQueryData(
+        queryKeys.orders.list(queryParams),
+        (old: typeof data) => {
+          if (!old) return old;
+          return {
+            ...old,
+            data: old.data.map((order) =>
+              order.id === updatedOrder.id
+                ? {
+                    ...order,
+                    ...updatedOrder,
+                    updatedAt: updatedOrder.updatedAt
+                      ? new Date(updatedOrder.updatedAt as unknown as string)
+                      : order.updatedAt,
+                    deliveredAt: updatedOrder.deliveredAt
+                      ? new Date(updatedOrder.deliveredAt as unknown as string)
+                      : order.deliveredAt,
+                  }
+                : order,
+            ),
+          };
+        },
       );
     });
 
@@ -167,12 +119,13 @@ export default function OrdersPage() {
       console.error("WebSocket connection failed:", err);
     });
 
-    return () => {
-      wsClient.disconnect();
-    };
-    // fetchOrders intentionally excluded — we only want this to run once on mount
+    return () => wsClient.disconnect();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  const isStale = wsStatus === "reconnecting" || wsStatus === "disconnected";
+
+  // ─── Handlers ─────────────────────────────────────────────────────────────
 
   const handleFiltersChange = useCallback(
     (newFilters: OrderFilters) => {
@@ -229,9 +182,7 @@ export default function OrdersPage() {
     CSVExporter.export(orders);
   }, [orders]);
 
-  const handleRetry = useCallback(() => {
-    fetchOrders();
-  }, [fetchOrders]);
+  // ─── Render ───────────────────────────────────────────────────────────────
 
   return (
     <div className="max-w-[1600px] mx-auto">
@@ -243,30 +194,28 @@ export default function OrdersPage() {
             View and manage your hospital&apos;s blood order history
           </p>
         </div>
-        {/* Connection status indicator — always visible in the header */}
         <div className="pt-1">
           <ConnectionStatusIndicator status={wsStatus} />
         </div>
       </div>
 
-      {/* Error Display */}
-      {error && (
-        <div className="mb-4 p-4 bg-red-50 border border-red-200 rounded-lg">
-          <div className="flex items-start gap-3">
-            <AlertCircle className="w-5 h-5 text-red-600 flex-shrink-0 mt-0.5" />
-            <div className="flex-1">
-              <p className="text-red-800 font-medium">Error loading orders</p>
-              <p className="text-red-700 text-sm mt-1">{error}</p>
-            </div>
-            <button
-              onClick={handleRetry}
-              className="flex items-center gap-2 px-3 py-1.5 bg-red-600 text-white rounded hover:bg-red-700 transition-colors text-sm"
-            >
-              <RefreshCw size={14} />
-              Retry
-            </button>
-          </div>
-        </div>
+      {/* Error */}
+      {isError && (
+        <ErrorDisplay
+          className="mb-4"
+          heading="Error loading orders"
+          message={
+            error instanceof Error
+              ? error.message
+              : "An unexpected error occurred"
+          }
+          onRetry={refetch}
+        />
+      )}
+
+      {/* Subtle fetching indicator (not the full spinner – keeps data visible) */}
+      {isFetching && !isLoading && (
+        <p className="mb-2 text-xs text-gray-400 animate-pulse">Refreshing…</p>
       )}
 
       <FilterPanel
@@ -276,18 +225,21 @@ export default function OrdersPage() {
         onExport={handleExport}
       />
 
-      {/* Pass isStale down to OrderTable so StatusBadge can dim during reconnect */}
-      <OrderTable
-        orders={orders}
-        sort={sort}
-        onSortChange={handleSortChange}
-        loading={loading}
-        emptyMessage="No orders found"
-        onClearFilters={handleClearFilters}
-        isStale={isStale}
-      />
+      {isLoading ? (
+        <LoadingSpinner />
+      ) : (
+        <OrderTable
+          orders={orders}
+          sort={sort}
+          onSortChange={handleSortChange}
+          loading={false}
+          emptyMessage="No orders found"
+          onClearFilters={handleClearFilters}
+          isStale={isStale}
+        />
+      )}
 
-      {!loading && orders.length > 0 && (
+      {!isLoading && orders.length > 0 && (
         <PaginationController
           currentPage={pagination.page}
           totalCount={totalCount}
