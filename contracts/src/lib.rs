@@ -28,7 +28,15 @@ pub enum Error {
     DuplicateRequest = 13,
     InvalidDeliveryAddress = 14,
     InvalidRequiredBy = 15,
+
+    /// Transfer has exceeded its allowed time window.
+    TransferExpired = 16,
+    /// Transfer has not yet exceeded its allowed time window.
+    TransferNotExpired = 17,
 }
+
+// Alias for issue/docs terminology.
+pub use Error as ContractError;
 
 /// Blood type enumeration
 #[contracttype]
@@ -231,6 +239,9 @@ const MAX_SHELF_LIFE_DAYS: u64 = 42; // Maximum 42 days for whole blood
 const MIN_REQUEST_ML: u32 = 50; // Minimum request amount
 const MAX_REQUEST_ML: u32 = 5000; // Maximum request amount
 const MAX_BATCH_SIZE: u32 = 100; // Maximum batch size for operations
+
+// Transfer expiry window (30 minutes)
+const TRANSFER_EXPIRY_SECONDS: u64 = 1800;
 
 // History storage key
 const HISTORY: Symbol = symbol_short!("HISTORY");
@@ -638,7 +649,16 @@ impl HealthChainContract {
     }
 
     /// Confirm blood delivery
+    ///
+    /// This is kept for backwards-compatibility and delegates to `confirm_transfer`.
     pub fn confirm_delivery(env: Env, hospital: Address, unit_id: u64) -> Result<(), Error> {
+        Self::confirm_transfer(env, hospital, unit_id)
+    }
+
+    /// Confirm an in-transit transfer.
+    ///
+    /// Must be confirmed strictly before `initiated_at + TRANSFER_EXPIRY_SECONDS`.
+    pub fn confirm_transfer(env: Env, hospital: Address, unit_id: u64) -> Result<(), Error> {
         hospital.require_auth();
 
         // Verify hospital is registered
@@ -665,10 +685,17 @@ impl HealthChainContract {
             return Err(Error::InvalidStatus);
         }
 
+        let initiated_at = unit.transfer_timestamp.ok_or(Error::StorageError)?;
         let current_time = env.ledger().timestamp();
+
+        // Transfer expiry check (at/after boundary is considered expired)
+        if current_time >= initiated_at.saturating_add(TRANSFER_EXPIRY_SECONDS) {
+            return Err(Error::TransferExpired);
+        }
+
         let old_status = unit.status;
 
-        // Check if expired during transit
+        // Check if blood unit expired during transit
         if unit.expiration_date <= current_time {
             unit.status = BloodStatus::Expired;
             units.set(unit_id, unit.clone());
@@ -702,6 +729,63 @@ impl HealthChainContract {
         // Emit event
         env.events().publish(
             (symbol_short!("blood"), symbol_short!("deliver")),
+            (unit_id, current_time),
+        );
+
+        Ok(())
+    }
+
+    /// Cancel an in-transit transfer.
+    ///
+    /// Transfer is cancellable at/after `initiated_at + TRANSFER_EXPIRY_SECONDS`.
+    pub fn cancel_transfer(env: Env, bank_id: Address, unit_id: u64) -> Result<(), Error> {
+        bank_id.require_auth();
+
+        if !Self::is_blood_bank(env.clone(), bank_id.clone()) {
+            return Err(Error::Unauthorized);
+        }
+
+        let mut units: Map<u64, BloodUnit> = env
+            .storage()
+            .persistent()
+            .get(&BLOOD_UNITS)
+            .unwrap_or(Map::new(&env));
+
+        let mut unit = units.get(unit_id).ok_or(Error::UnitNotFound)?;
+
+        // Only cancellable while in transit
+        if unit.status != BloodStatus::InTransit {
+            return Err(Error::InvalidStatus);
+        }
+
+        let initiated_at = unit.transfer_timestamp.ok_or(Error::StorageError)?;
+        let current_time = env.ledger().timestamp();
+
+        if current_time < initiated_at.saturating_add(TRANSFER_EXPIRY_SECONDS) {
+            return Err(Error::TransferNotExpired);
+        }
+
+        let old_status = unit.status;
+
+        // Revert back to Reserved state; keep recipient_hospital + allocation_timestamp.
+        unit.status = BloodStatus::Reserved;
+        unit.transfer_timestamp = None;
+
+        units.set(unit_id, unit.clone());
+        env.storage().persistent().set(&BLOOD_UNITS, &units);
+
+        // Record status change
+        Self::record_status_change(
+            &env,
+            unit_id,
+            old_status,
+            BloodStatus::Reserved,
+            bank_id.clone(),
+        );
+
+        // Emit event
+        env.events().publish(
+            (symbol_short!("blood"), symbol_short!("transfer_cancel")),
             (unit_id, current_time),
         );
 
@@ -1455,9 +1539,11 @@ impl HealthChainContract {
 #[cfg(test)]
 mod test {
     use super::*;
+    use soroban_sdk::testutils::Ledger;
+    use soroban_sdk::IntoVal;
     use soroban_sdk::{
-        symbol_short, testutils::Address as _, testutils::Events, Address, Env, String, Symbol,
-        TryFromVal,
+        symbol_short, testutils::Address as _, testutils::Events, testutils::Ledger as _, Address,
+        Env, String, Symbol, TryFromVal,
     };
 
     fn setup_contract_with_admin(env: &Env) -> (Address, Address, HealthChainContractClient<'_>) {
@@ -1485,6 +1571,206 @@ mod test {
         (contract_id, admin, hospital, client)
     }
 
+    // ─────────────────────────────────────────────────────────────────────────────
+    // Adversarial Access Control Tests (Privilege Escalation Attempts)
+    // ─────────────────────────────────────────────────────────────────────────────
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #1)")]
+    fn test_attack_hospital_spoofs_bank_register_blood_should_fail() {
+        let env = Env::default();
+        let (contract_id, _admin, client) = setup_contract_with_admin(&env);
+
+        // Register a hospital (not a bank)
+        let hospital = Address::generate(&env);
+        env.mock_all_auths();
+        client.register_hospital(&hospital);
+
+        // Hospital attempts to register blood (requires authorized blood bank)
+        let current_time = env.ledger().timestamp();
+        let expiration = current_time + (7 * 86400);
+
+        env.mock_all_auths();
+        client.register_blood(&hospital, &BloodType::OPositive, &450, &expiration, &None);
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #1)")]
+    fn test_attack_unregistered_hospital_create_request_should_fail() {
+        let env = Env::default();
+        let (contract_id, _admin, client) = setup_contract_with_admin(&env);
+
+        // Unregistered hospital tries to create a request
+        let rogue_hospital = Address::generate(&env);
+        let current_time = env.ledger().timestamp();
+        let required_by = current_time + (2 * 86400);
+        let delivery = String::from_slice(&env, "Ward 7B - ICU");
+
+        env.mock_all_auths();
+        client.create_request(
+            &rogue_hospital,
+            &BloodType::APositive,
+            &500,
+            &UrgencyLevel::High,
+            &required_by,
+            &delivery,
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #1)")]
+    fn test_attack_unregistered_bank_allocates_blood_should_fail() {
+        let env = Env::default();
+        let (contract_id, _admin, client) = setup_contract_with_admin(&env);
+
+        // Create a unit via legacy add_blood_unit (no bank auth required)
+        let current_time = env.ledger().timestamp();
+        let expiration = current_time + (10 * 86400);
+        let unit_id = client.add_blood_unit(
+            &BloodType::ONegative,
+            &300,
+            &expiration,
+            &symbol_short!("DONOR"),
+            &symbol_short!("BANK"),
+        );
+
+        // Register a hospital to avoid UnauthorizedHospital being triggered later
+        let hospital = Address::generate(&env);
+        env.mock_all_auths();
+        client.register_hospital(&hospital);
+
+        // Unregistered bank attempts to allocate
+        let rogue_bank = Address::generate(&env);
+        env.mock_all_auths();
+        client.allocate_blood(&rogue_bank, &unit_id, &hospital);
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #8)")]
+    fn test_attack_expired_unit_allocated_should_fail() {
+        let env = Env::default();
+        let (_contract_id, _admin, client) = setup_contract_with_admin(&env);
+
+        // Register an authorized bank and hospital
+        let bank = Address::generate(&env);
+        let hospital = Address::generate(&env);
+        env.mock_all_auths();
+        client.register_blood_bank(&bank);
+        env.mock_all_auths();
+        client.register_hospital(&hospital);
+
+        // Create a unit that will expire shortly
+        let now = env.ledger().timestamp();
+        let expiration = now + 100;
+        let unit_id = client.add_blood_unit(
+            &BloodType::BPositive,
+            &250,
+            &expiration,
+            &symbol_short!("DNR"),
+            &symbol_short!("BANK"),
+        );
+
+        // Advance time past expiration and attempt allocation
+        env.ledger().set_timestamp(expiration + 1);
+        env.mock_all_auths();
+        client.allocate_blood(&bank, &unit_id, &hospital);
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #1)")]
+    fn test_attack_revoked_bank_immediate_reuse_should_fail() {
+        let env = Env::default();
+        let (contract_id, _admin, client) = setup_contract_with_admin(&env);
+
+        // Register bank and create unit
+        let bank = Address::generate(&env);
+        env.mock_all_auths();
+        client.register_blood_bank(&bank);
+        let now = env.ledger().timestamp();
+        let expiration = now + (5 * 86400);
+        let unit_id = client.add_blood_unit(
+            &BloodType::ABNegative,
+            &200,
+            &expiration,
+            &symbol_short!("DNR2"),
+            &symbol_short!("BANK"),
+        );
+
+        // "Revoke" by clearing BANKS map directly
+        env.as_contract(&contract_id, || {
+            let empty_banks = Map::<Address, bool>::new(&env);
+            env.storage().persistent().set(&BLOOD_BANKS, &empty_banks);
+        });
+
+        // Attempt to register blood using revoked bank (should fail Unauthorized)
+        env.mock_all_auths();
+        client.register_blood(&bank, &BloodType::OPositive, &100, &expiration, &None);
+
+        // Attempt to allocate using revoked bank (should also fail Unauthorized)
+        env.mock_all_auths();
+        let hospital = Address::generate(&env);
+        env.mock_all_auths();
+        client.register_hospital(&hospital);
+        client.allocate_blood(&bank, &unit_id, &hospital);
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #1)")]
+    fn test_attack_wrong_hospital_confirm_delivery_should_fail() {
+        let env = Env::default();
+        let (_contract_id, _admin, client) = setup_contract_with_admin(&env);
+
+        // Register bank and two hospitals
+        let bank = Address::generate(&env);
+        let hospital_a = Address::generate(&env);
+        let hospital_b = Address::generate(&env);
+        env.mock_all_auths();
+        client.register_blood_bank(&bank);
+        env.mock_all_auths();
+        client.register_hospital(&hospital_a);
+        env.mock_all_auths();
+        client.register_hospital(&hospital_b);
+
+        // Create unit and allocate to hospital A
+        let now = env.ledger().timestamp();
+        let expiration = now + (7 * 86400);
+        let unit_id = client.add_blood_unit(
+            &BloodType::APositive,
+            &300,
+            &expiration,
+            &symbol_short!("DNR3"),
+            &symbol_short!("BANK"),
+        );
+        env.mock_all_auths();
+        client.allocate_blood(&bank, &unit_id, &hospital_a);
+
+        // Hospital B attempts to confirm delivery for unit allocated to A
+        env.mock_all_auths();
+        client.confirm_delivery(&hospital_b, &unit_id);
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #1)")]
+    fn test_attack_withdraw_blood_by_unauthorized_address_should_fail() {
+        let env = Env::default();
+        let (_contract_id, _admin, client) = setup_contract_with_admin(&env);
+
+        // Create a unit
+        let now = env.ledger().timestamp();
+        let expiration = now + (10 * 86400);
+        let unit_id = client.add_blood_unit(
+            &BloodType::ONegative,
+            &400,
+            &expiration,
+            &symbol_short!("DNR4"),
+            &symbol_short!("BANK"),
+        );
+
+        // Rogue address (neither bank nor hospital) attempts to withdraw
+        let attacker = Address::generate(&env);
+        env.mock_all_auths();
+        client.withdraw_blood(&attacker, &unit_id, &WithdrawalReason::Other);
+    }
     #[test]
     fn test_initialize() {
         let env = Env::default();
@@ -2283,7 +2569,7 @@ mod test {
             &500,
             &UrgencyLevel::High,
             &required_by,
-            &symbol_short!("Main_Hosp"),
+            &String::from_str(&env, "Main_Hosp"),
         );
 
         assert_eq!(result, 1);
@@ -2305,7 +2591,7 @@ mod test {
             &400,
             &UrgencyLevel::Medium,
             &(env.ledger().timestamp() + 86400),
-            &symbol_short!("Hosp_1"),
+            &String::from_str(&env, "Hosp_1"),
         );
     }
 
@@ -2345,7 +2631,7 @@ mod test {
             &10, // Below MIN_QUANTITY_ML (50)
             &UrgencyLevel::Low,
             &(env.ledger().timestamp() + 86400),
-            &symbol_short!("Hosp_1"),
+            &String::from_str(&env, "Hosp_1"),
         );
     }
 
@@ -2409,7 +2695,7 @@ mod test {
             &200,
             &UrgencyLevel::High,
             &5000, // Now this is safely in the past (5000 < 10000)
-            &symbol_short!("Hosp_1"),
+            &String::from_str(&env, "Hosp_1"),
         );
     }
 
@@ -2500,7 +2786,7 @@ mod test {
             &300,
             &UrgencyLevel::Critical,
             &(env.ledger().timestamp() + 3600),
-            &symbol_short!("ER_Room"),
+            &String::from_str(&env, "ER_Room"),
         );
 
         // Get the last event
@@ -2986,6 +3272,172 @@ mod test {
         // Try to fulfill non-existent request
         let unit_ids = vec![&env, 1u64];
         client.fulfill_request(&999u64, &unit_ids);
+    }
+
+    // ======================================================
+    // Transfer Expiry Boundary Tests (#105)
+    // ======================================================
+
+    fn setup_in_transit_unit(
+        env: &Env,
+        client: &HealthChainContractClient<'_>,
+        bank: &Address,
+        hospital: &Address,
+        initiated_at: u64,
+    ) -> u64 {
+        // Ensure deterministic time for registration + allocation.
+        env.ledger().set_timestamp(initiated_at.saturating_sub(10));
+
+        let expiration = initiated_at + (7 * 86400);
+        let unit_id = client.register_blood(
+            bank,
+            &BloodType::OPositive,
+            &450,
+            &expiration,
+            &Some(symbol_short!("donor")),
+        );
+
+        client.allocate_blood(bank, &unit_id, hospital);
+
+        // Initiate transfer at exact initiated_at.
+        env.ledger().set_timestamp(initiated_at);
+        client.initiate_transfer(bank, &unit_id);
+
+        unit_id
+    }
+
+    #[test]
+    fn test_transfer_cancellable_at_exactly_expiry_boundary_succeeds() {
+        let env = Env::default();
+        let (_, _, hospital, client) = setup_contract_with_hospital(&env);
+
+        // Register a blood bank
+        let bank = Address::generate(&env);
+        env.mock_all_auths();
+        client.register_blood_bank(&bank);
+
+        let initiated_at = 1_000_000u64;
+        let unit_id = setup_in_transit_unit(&env, &client, &bank, &hospital, initiated_at);
+
+        // At initiated_at + 1800 => cancellable
+        env.ledger()
+            .set_timestamp(initiated_at + TRANSFER_EXPIRY_SECONDS);
+        client.cancel_transfer(&bank, &unit_id);
+
+        let unit = client.get_blood_unit(&unit_id);
+        assert_eq!(unit.status, BloodStatus::Reserved);
+        assert_eq!(unit.transfer_timestamp, None);
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #17)")]
+    fn test_transfer_not_cancellable_one_second_before_expiry_fails() {
+        let env = Env::default();
+        let (_, _, hospital, client) = setup_contract_with_hospital(&env);
+
+        let bank = Address::generate(&env);
+        env.mock_all_auths();
+        client.register_blood_bank(&bank);
+
+        let initiated_at = 1_000_000u64;
+        let unit_id = setup_in_transit_unit(&env, &client, &bank, &hospital, initiated_at);
+
+        // At initiated_at + 1799 => NOT cancellable
+        env.ledger()
+            .set_timestamp(initiated_at + TRANSFER_EXPIRY_SECONDS - 1);
+        client.cancel_transfer(&bank, &unit_id);
+    }
+
+    #[test]
+    fn test_transfer_cancellable_one_second_after_expiry_succeeds() {
+        let env = Env::default();
+        let (_, _, hospital, client) = setup_contract_with_hospital(&env);
+
+        let bank = Address::generate(&env);
+        env.mock_all_auths();
+        client.register_blood_bank(&bank);
+
+        let initiated_at = 1_000_000u64;
+        let unit_id = setup_in_transit_unit(&env, &client, &bank, &hospital, initiated_at);
+
+        // At initiated_at + 1801 => cancellable
+        env.ledger()
+            .set_timestamp(initiated_at + TRANSFER_EXPIRY_SECONDS + 1);
+        client.cancel_transfer(&bank, &unit_id);
+
+        let unit = client.get_blood_unit(&unit_id);
+        assert_eq!(unit.status, BloodStatus::Reserved);
+    }
+
+    #[test]
+    fn test_transfer_confirmation_one_second_before_expiry_succeeds() {
+        let env = Env::default();
+        let (_, _, hospital, client) = setup_contract_with_hospital(&env);
+
+        let bank = Address::generate(&env);
+        env.mock_all_auths();
+        client.register_blood_bank(&bank);
+
+        let initiated_at = 1_000_000u64;
+        let unit_id = setup_in_transit_unit(&env, &client, &bank, &hospital, initiated_at);
+
+        // At initiated_at + 1799 => confirm succeeds
+        env.ledger()
+            .set_timestamp(initiated_at + TRANSFER_EXPIRY_SECONDS - 1);
+        client.confirm_transfer(&hospital, &unit_id);
+
+        let unit = client.get_blood_unit(&unit_id);
+        assert_eq!(unit.status, BloodStatus::Delivered);
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #16)")]
+    fn test_transfer_confirmation_at_expiry_boundary_fails_with_transfer_expired() {
+        let env = Env::default();
+        let (_, _, hospital, client) = setup_contract_with_hospital(&env);
+
+        let bank = Address::generate(&env);
+        env.mock_all_auths();
+        client.register_blood_bank(&bank);
+
+        let initiated_at = 1_000_000u64;
+        let unit_id = setup_in_transit_unit(&env, &client, &bank, &hospital, initiated_at);
+
+        // At initiated_at + 1800 => confirm fails
+        env.ledger()
+            .set_timestamp(initiated_at + TRANSFER_EXPIRY_SECONDS);
+        client.confirm_transfer(&hospital, &unit_id);
+    }
+
+    #[test]
+    fn test_multiple_transfers_track_expiry_independently() {
+        let env = Env::default();
+        let (_, _, hospital, client) = setup_contract_with_hospital(&env);
+
+        let bank = Address::generate(&env);
+        env.mock_all_auths();
+        client.register_blood_bank(&bank);
+
+        let t1 = 1_000_000u64;
+        let t2 = t1 + 100;
+
+        let unit_1 = setup_in_transit_unit(&env, &client, &bank, &hospital, t1);
+        let unit_2 = setup_in_transit_unit(&env, &client, &bank, &hospital, t2);
+
+        // At t1 + 1800: transfer #1 expired, transfer #2 still within window.
+        env.ledger().set_timestamp(t1 + TRANSFER_EXPIRY_SECONDS);
+
+        // Unit 1 can be cancelled.
+        client.cancel_transfer(&bank, &unit_1);
+
+        // Unit 2 can still be confirmed at the same ledger time.
+        client.confirm_transfer(&hospital, &unit_2);
+
+        let u1 = client.get_blood_unit(&unit_1);
+        let u2 = client.get_blood_unit(&unit_2);
+
+        assert_eq!(u1.status, BloodStatus::Reserved);
+        assert_eq!(u2.status, BloodStatus::Delivered);
     }
 
     #[test]
