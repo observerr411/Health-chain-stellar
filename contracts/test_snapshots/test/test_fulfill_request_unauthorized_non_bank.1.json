@@ -58,7 +58,7 @@
                 {
                   "vec": [
                     {
-                      "symbol": "APositive"
+                      "symbol": "OPositive"
                     }
                   ]
                 },
@@ -76,7 +76,7 @@
                   "u64": 3600
                 },
                 {
-                  "string": "Ward A, City Hospital"
+                  "string": "Ward A"
                 }
               ]
             }
@@ -84,7 +84,9 @@
           "sub_invocations": []
         }
       ]
-    ]
+    ],
+    [],
+    []
   ],
   "ledger": {
     "protocol_version": 22,
@@ -269,7 +271,7 @@
                             "val": {
                               "vec": [
                                 {
-                                  "symbol": "APositive"
+                                  "symbol": "OPositive"
                                 }
                               ]
                             }
@@ -287,7 +289,7 @@
                               "symbol": "delivery_address"
                             },
                             "val": {
-                              "string": "Ward A, City Hospital"
+                              "string": "Ward A"
                             }
                           },
                           {
@@ -343,7 +345,7 @@
                             "val": {
                               "vec": [
                                 {
-                                  "symbol": "Pending"
+                                  "symbol": "Approved"
                                 }
                               ]
                             }
@@ -405,7 +407,7 @@
                             "val": {
                               "vec": [
                                 {
-                                  "symbol": "APositive"
+                                  "symbol": "OPositive"
                                 }
                               ]
                             }
@@ -415,7 +417,7 @@
                               "symbol": "delivery_address"
                             },
                             "val": {
-                              "string": "Ward A, City Hospital"
+                              "string": "Ward A"
                             }
                           },
                           {
@@ -566,102 +568,5 @@
       ]
     ]
   },
-  "events": [
-    {
-      "event": {
-        "ext": "v0",
-        "contract_id": "0000000000000000000000000000000000000000000000000000000000000002",
-        "type_": "contract",
-        "body": {
-          "v0": {
-            "topics": [
-              {
-                "symbol": "request"
-              },
-              {
-                "symbol": "create"
-              }
-            ],
-            "data": {
-              "map": [
-                {
-                  "key": {
-                    "symbol": "blood_type"
-                  },
-                  "val": {
-                    "vec": [
-                      {
-                        "symbol": "APositive"
-                      }
-                    ]
-                  }
-                },
-                {
-                  "key": {
-                    "symbol": "created_at"
-                  },
-                  "val": {
-                    "u64": 0
-                  }
-                },
-                {
-                  "key": {
-                    "symbol": "delivery_address"
-                  },
-                  "val": {
-                    "string": "Ward A, City Hospital"
-                  }
-                },
-                {
-                  "key": {
-                    "symbol": "hospital_id"
-                  },
-                  "val": {
-                    "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M"
-                  }
-                },
-                {
-                  "key": {
-                    "symbol": "quantity_ml"
-                  },
-                  "val": {
-                    "u32": 500
-                  }
-                },
-                {
-                  "key": {
-                    "symbol": "request_id"
-                  },
-                  "val": {
-                    "u64": 1
-                  }
-                },
-                {
-                  "key": {
-                    "symbol": "required_by"
-                  },
-                  "val": {
-                    "u64": 3600
-                  }
-                },
-                {
-                  "key": {
-                    "symbol": "urgency"
-                  },
-                  "val": {
-                    "vec": [
-                      {
-                        "symbol": "Urgent"
-                      }
-                    ]
-                  }
-                }
-              ]
-            }
-          }
-        }
-      },
-      "failed_call": false
-    }
-  ]
+  "events": []
 }

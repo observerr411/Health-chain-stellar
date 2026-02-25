@@ -58,7 +58,7 @@
                 {
                   "vec": [
                     {
-                      "symbol": "APositive"
+                      "symbol": "OPositive"
                     }
                   ]
                 },
@@ -68,7 +68,7 @@
                 {
                   "vec": [
                     {
-                      "symbol": "Urgent"
+                      "symbol": "Low"
                     }
                   ]
                 },
@@ -76,7 +76,7 @@
                   "u64": 3600
                 },
                 {
-                  "string": "Ward A, City Hospital"
+                  "string": "Ward A"
                 }
               ]
             }
@@ -84,7 +84,8 @@
           "sub_invocations": []
         }
       ]
-    ]
+    ],
+    []
   ],
   "ledger": {
     "protocol_version": 22,
@@ -269,7 +270,7 @@
                             "val": {
                               "vec": [
                                 {
-                                  "symbol": "APositive"
+                                  "symbol": "OPositive"
                                 }
                               ]
                             }
@@ -287,7 +288,7 @@
                               "symbol": "delivery_address"
                             },
                             "val": {
-                              "string": "Ward A, City Hospital"
+                              "string": "Ward A"
                             }
                           },
                           {
@@ -343,7 +344,7 @@
                             "val": {
                               "vec": [
                                 {
-                                  "symbol": "Pending"
+                                  "symbol": "Rejected"
                                 }
                               ]
                             }
@@ -355,7 +356,7 @@
                             "val": {
                               "vec": [
                                 {
-                                  "symbol": "Urgent"
+                                  "symbol": "Low"
                                 }
                               ]
                             }
@@ -405,7 +406,7 @@
                             "val": {
                               "vec": [
                                 {
-                                  "symbol": "APositive"
+                                  "symbol": "OPositive"
                                 }
                               ]
                             }
@@ -415,7 +416,7 @@
                               "symbol": "delivery_address"
                             },
                             "val": {
-                              "string": "Ward A, City Hospital"
+                              "string": "Ward A"
                             }
                           },
                           {
@@ -449,7 +450,7 @@
                             "val": {
                               "vec": [
                                 {
-                                  "symbol": "Urgent"
+                                  "symbol": "Low"
                                 }
                               ]
                             }
@@ -579,54 +580,48 @@
                 "symbol": "request"
               },
               {
-                "symbol": "create"
+                "symbol": "status"
               }
             ],
             "data": {
               "map": [
                 {
                   "key": {
-                    "symbol": "blood_type"
+                    "symbol": "actor"
+                  },
+                  "val": {
+                    "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4"
+                  }
+                },
+                {
+                  "key": {
+                    "symbol": "new_status"
                   },
                   "val": {
                     "vec": [
                       {
-                        "symbol": "APositive"
+                        "symbol": "Rejected"
                       }
                     ]
                   }
                 },
                 {
                   "key": {
-                    "symbol": "created_at"
+                    "symbol": "old_status"
                   },
                   "val": {
-                    "u64": 0
+                    "vec": [
+                      {
+                        "symbol": "Pending"
+                      }
+                    ]
                   }
                 },
                 {
                   "key": {
-                    "symbol": "delivery_address"
+                    "symbol": "reason"
                   },
-                  "val": {
-                    "string": "Ward A, City Hospital"
-                  }
-                },
-                {
-                  "key": {
-                    "symbol": "hospital_id"
-                  },
-                  "val": {
-                    "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M"
-                  }
-                },
-                {
-                  "key": {
-                    "symbol": "quantity_ml"
-                  },
-                  "val": {
-                    "u32": 500
-                  }
+                  "val": "void"
                 },
                 {
                   "key": {
@@ -638,22 +633,10 @@
                 },
                 {
                   "key": {
-                    "symbol": "required_by"
+                    "symbol": "timestamp"
                   },
                   "val": {
-                    "u64": 3600
-                  }
-                },
-                {
-                  "key": {
-                    "symbol": "urgency"
-                  },
-                  "val": {
-                    "vec": [
-                      {
-                        "symbol": "Urgent"
-                      }
-                    ]
+                    "u64": 0
                   }
                 }
               ]
