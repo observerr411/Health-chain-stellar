@@ -58,7 +58,7 @@
                 {
                   "vec": [
                     {
-                      "symbol": "APositive"
+                      "symbol": "OPositive"
                     }
                   ]
                 },
@@ -76,7 +76,7 @@
                   "u64": 3600
                 },
                 {
-                  "string": "Ward A, City Hospital"
+                  "string": "Ward A"
                 }
               ]
             }
@@ -84,7 +84,9 @@
           "sub_invocations": []
         }
       ]
-    ]
+    ],
+    [],
+    []
   ],
   "ledger": {
     "protocol_version": 22,
@@ -269,7 +271,7 @@
                             "val": {
                               "vec": [
                                 {
-                                  "symbol": "APositive"
+                                  "symbol": "OPositive"
                                 }
                               ]
                             }
@@ -287,7 +289,7 @@
                               "symbol": "delivery_address"
                             },
                             "val": {
-                              "string": "Ward A, City Hospital"
+                              "string": "Ward A"
                             }
                           },
                           {
@@ -343,7 +345,7 @@
                             "val": {
                               "vec": [
                                 {
-                                  "symbol": "Pending"
+                                  "symbol": "Cancelled"
                                 }
                               ]
                             }
@@ -405,7 +407,7 @@
                             "val": {
                               "vec": [
                                 {
-                                  "symbol": "APositive"
+                                  "symbol": "OPositive"
                                 }
                               ]
                             }
@@ -415,7 +417,7 @@
                               "symbol": "delivery_address"
                             },
                             "val": {
-                              "string": "Ward A, City Hospital"
+                              "string": "Ward A"
                             }
                           },
                           {
@@ -461,6 +463,37 @@
                       }
                     }
                   ]
+                }
+              }
+            },
+            "ext": "v0"
+          },
+          4095
+        ]
+      ],
+      [
+        {
+          "contract_data": {
+            "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4",
+            "key": {
+              "symbol": "UNITS"
+            },
+            "durability": "persistent"
+          }
+        },
+        [
+          {
+            "last_modified_ledger_seq": 0,
+            "data": {
+              "contract_data": {
+                "ext": "v0",
+                "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4",
+                "key": {
+                  "symbol": "UNITS"
+                },
+                "durability": "persistent",
+                "val": {
+                  "map": []
                 }
               }
             },
@@ -579,53 +612,49 @@
                 "symbol": "request"
               },
               {
-                "symbol": "create"
+                "symbol": "status"
               }
             ],
             "data": {
               "map": [
                 {
                   "key": {
-                    "symbol": "blood_type"
+                    "symbol": "actor"
+                  },
+                  "val": {
+                    "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4"
+                  }
+                },
+                {
+                  "key": {
+                    "symbol": "new_status"
                   },
                   "val": {
                     "vec": [
                       {
-                        "symbol": "APositive"
+                        "symbol": "Cancelled"
                       }
                     ]
                   }
                 },
                 {
                   "key": {
-                    "symbol": "created_at"
+                    "symbol": "old_status"
                   },
                   "val": {
-                    "u64": 0
+                    "vec": [
+                      {
+                        "symbol": "Approved"
+                      }
+                    ]
                   }
                 },
                 {
                   "key": {
-                    "symbol": "delivery_address"
+                    "symbol": "reason"
                   },
                   "val": {
-                    "string": "Ward A, City Hospital"
-                  }
-                },
-                {
-                  "key": {
-                    "symbol": "hospital_id"
-                  },
-                  "val": {
-                    "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M"
-                  }
-                },
-                {
-                  "key": {
-                    "symbol": "quantity_ml"
-                  },
-                  "val": {
-                    "u32": 500
+                    "string": "Changed requirements"
                   }
                 },
                 {
@@ -638,22 +667,10 @@
                 },
                 {
                   "key": {
-                    "symbol": "required_by"
+                    "symbol": "timestamp"
                   },
                   "val": {
-                    "u64": 3600
-                  }
-                },
-                {
-                  "key": {
-                    "symbol": "urgency"
-                  },
-                  "val": {
-                    "vec": [
-                      {
-                        "symbol": "Urgent"
-                      }
-                    ]
+                    "u64": 0
                   }
                 }
               ]

@@ -129,6 +129,28 @@ pub struct StatusChangeEvent {
     pub timestamp: u64,
 }
 
+/// Custody event for chain-of-custody tracking
+#[contracttype]
+#[derive(Clone)]
+pub struct CustodyEvent {
+    pub event_id: String,
+    pub unit_id: u64,
+    pub from_custodian: Address,
+    pub to_custodian: Address,
+    pub initiated_at: u64,
+    pub ledger_sequence: u32,
+    pub status: CustodyStatus,
+}
+
+/// Custody status enumeration
+#[contracttype]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CustodyStatus {
+    Pending,
+    Confirmed,
+    Cancelled,
+}
+
 /// Request status enumeration
 #[contracttype]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -230,6 +252,7 @@ const REQUESTS: Symbol = symbol_short!("REQUESTS");
 const NEXT_REQUEST_ID: Symbol = symbol_short!("NEXT_REQ");
 const REQUEST_KEYS: Symbol = symbol_short!("REQ_KEYS");
 const BLOOD_REQUESTS: Symbol = symbol_short!("REQS");
+const CUSTODY_EVENTS: Symbol = symbol_short!("CUSTODY");
 
 // Validation constants
 const MIN_QUANTITY_ML: u32 = 50; // Minimum 50ml
@@ -595,7 +618,8 @@ impl HealthChainContract {
     }
 
     /// Initiate blood transfer
-    pub fn initiate_transfer(env: Env, bank_id: Address, unit_id: u64) -> Result<(), Error> {
+    /// Creates a custody event with deterministically derived event_id
+    pub fn initiate_transfer(env: Env, bank_id: Address, unit_id: u64) -> Result<String, Error> {
         bank_id.require_auth();
 
         if !Self::is_blood_bank(env.clone(), bank_id.clone()) {
@@ -625,6 +649,33 @@ impl HealthChainContract {
             return Err(Error::InvalidStatus);
         }
 
+        // Get the recipient hospital (to_custodian)
+        let to_custodian = unit.recipient_hospital.clone().ok_or(Error::StorageError)?;
+
+        // Derive deterministic event_id
+        let event_id = Self::derive_event_id(&env, unit_id, &bank_id, &to_custodian);
+
+        // Create custody event
+        let custody_event = CustodyEvent {
+            event_id: event_id.clone(),
+            unit_id,
+            from_custodian: bank_id.clone(),
+            to_custodian: to_custodian.clone(),
+            initiated_at: current_time,
+            ledger_sequence: env.ledger().sequence(),
+            status: CustodyStatus::Pending,
+        };
+
+        // Store custody event
+        let mut custody_events: Map<String, CustodyEvent> = env
+            .storage()
+            .persistent()
+            .get(&CUSTODY_EVENTS)
+            .unwrap_or(Map::new(&env));
+
+        custody_events.set(event_id.clone(), custody_event.clone());
+        env.storage().persistent().set(&CUSTODY_EVENTS, &custody_events);
+
         let old_status = unit.status;
         unit.status = BloodStatus::InTransit;
         unit.transfer_timestamp = Some(current_time);
@@ -641,30 +692,70 @@ impl HealthChainContract {
         );
 
         env.events().publish(
-            (symbol_short!("blood"), symbol_short!("transfer")),
-            (unit_id, current_time),
+            (symbol_short!("custody"), symbol_short!("initiate")),
+            custody_event,
         );
 
-        Ok(())
+        Ok(event_id)
     }
 
     /// Confirm blood delivery
     ///
     /// This is kept for backwards-compatibility and delegates to `confirm_transfer`.
+    /// Note: This function looks up the pending custody event by unit_id for convenience.
     pub fn confirm_delivery(env: Env, hospital: Address, unit_id: u64) -> Result<(), Error> {
-        Self::confirm_transfer(env, hospital, unit_id)
+        // Find the pending custody event for this unit
+        let custody_events: Map<String, CustodyEvent> = env
+            .storage()
+            .persistent()
+            .get(&CUSTODY_EVENTS)
+            .unwrap_or(Map::new(&env));
+
+        // Search for pending custody event with matching unit_id
+        let mut found_event_id: Option<String> = None;
+        for (event_id, event) in custody_events.iter() {
+            if event.unit_id == unit_id && event.status == CustodyStatus::Pending {
+                found_event_id = Some(event_id);
+                break;
+            }
+        }
+
+        let event_id = found_event_id.ok_or(Error::UnitNotFound)?;
+        Self::confirm_transfer(env, hospital, event_id)
     }
 
-    /// Confirm an in-transit transfer.
+    /// Confirm an in-transit transfer using the derived event_id.
     ///
     /// Must be confirmed strictly before `initiated_at + TRANSFER_EXPIRY_SECONDS`.
-    pub fn confirm_transfer(env: Env, hospital: Address, unit_id: u64) -> Result<(), Error> {
+    /// Callers must compute the same hash (unit_id + from + to + ledger_sequence) to reference the transfer.
+    pub fn confirm_transfer(env: Env, hospital: Address, event_id: String) -> Result<(), Error> {
         hospital.require_auth();
 
         // Verify hospital is registered
         if !Self::is_hospital(env.clone(), hospital.clone()) {
             return Err(Error::UnauthorizedHospital);
         }
+
+        // Get custody event
+        let mut custody_events: Map<String, CustodyEvent> = env
+            .storage()
+            .persistent()
+            .get(&CUSTODY_EVENTS)
+            .unwrap_or(Map::new(&env));
+
+        let mut custody_event = custody_events.get(event_id.clone()).ok_or(Error::UnitNotFound)?;
+
+        // Verify hospital is the recipient
+        if custody_event.to_custodian != hospital {
+            return Err(Error::Unauthorized);
+        }
+
+        // Check custody status - must be Pending
+        if custody_event.status != CustodyStatus::Pending {
+            return Err(Error::InvalidStatus);
+        }
+
+        let unit_id = custody_event.unit_id;
 
         // Get blood unit
         let mut units: Map<u64, BloodUnit> = env
@@ -675,17 +766,12 @@ impl HealthChainContract {
 
         let mut unit = units.get(unit_id).ok_or(Error::UnitNotFound)?;
 
-        // Verify hospital is the recipient
-        if unit.recipient_hospital != Some(hospital.clone()) {
-            return Err(Error::Unauthorized);
-        }
-
         // Check status - must be InTransit
         if unit.status != BloodStatus::InTransit {
             return Err(Error::InvalidStatus);
         }
 
-        let initiated_at = unit.transfer_timestamp.ok_or(Error::StorageError)?;
+        let initiated_at = custody_event.initiated_at;
         let current_time = env.ledger().timestamp();
 
         // Transfer expiry check (at/after boundary is considered expired)
@@ -700,6 +786,11 @@ impl HealthChainContract {
             unit.status = BloodStatus::Expired;
             units.set(unit_id, unit.clone());
             env.storage().persistent().set(&BLOOD_UNITS, &units);
+            
+            custody_event.status = CustodyStatus::Cancelled;
+            custody_events.set(event_id, custody_event);
+            env.storage().persistent().set(&CUSTODY_EVENTS, &custody_events);
+            
             Self::record_status_change(
                 &env,
                 unit_id,
@@ -709,6 +800,11 @@ impl HealthChainContract {
             );
             return Err(Error::UnitExpired);
         }
+
+        // Update custody event status
+        custody_event.status = CustodyStatus::Confirmed;
+        custody_events.set(event_id.clone(), custody_event.clone());
+        env.storage().persistent().set(&CUSTODY_EVENTS, &custody_events);
 
         // Update unit
         unit.status = BloodStatus::Delivered;
@@ -728,22 +824,44 @@ impl HealthChainContract {
 
         // Emit event
         env.events().publish(
-            (symbol_short!("blood"), symbol_short!("deliver")),
-            (unit_id, current_time),
+            (symbol_short!("custody"), symbol_short!("confirm")),
+            custody_event,
         );
 
         Ok(())
     }
 
-    /// Cancel an in-transit transfer.
+    /// Cancel an in-transit transfer using the derived event_id.
     ///
     /// Transfer is cancellable at/after `initiated_at + TRANSFER_EXPIRY_SECONDS`.
-    pub fn cancel_transfer(env: Env, bank_id: Address, unit_id: u64) -> Result<(), Error> {
+    /// Callers must compute the same hash (unit_id + from + to + ledger_sequence) to reference the transfer.
+    pub fn cancel_transfer(env: Env, bank_id: Address, event_id: String) -> Result<(), Error> {
         bank_id.require_auth();
 
         if !Self::is_blood_bank(env.clone(), bank_id.clone()) {
             return Err(Error::Unauthorized);
         }
+
+        // Get custody event
+        let mut custody_events: Map<String, CustodyEvent> = env
+            .storage()
+            .persistent()
+            .get(&CUSTODY_EVENTS)
+            .unwrap_or(Map::new(&env));
+
+        let mut custody_event = custody_events.get(event_id.clone()).ok_or(Error::UnitNotFound)?;
+
+        // Verify bank is the sender
+        if custody_event.from_custodian != bank_id {
+            return Err(Error::Unauthorized);
+        }
+
+        // Check custody status - must be Pending
+        if custody_event.status != CustodyStatus::Pending {
+            return Err(Error::InvalidStatus);
+        }
+
+        let unit_id = custody_event.unit_id;
 
         let mut units: Map<u64, BloodUnit> = env
             .storage()
@@ -758,12 +876,17 @@ impl HealthChainContract {
             return Err(Error::InvalidStatus);
         }
 
-        let initiated_at = unit.transfer_timestamp.ok_or(Error::StorageError)?;
+        let initiated_at = custody_event.initiated_at;
         let current_time = env.ledger().timestamp();
 
         if current_time < initiated_at.saturating_add(TRANSFER_EXPIRY_SECONDS) {
             return Err(Error::TransferNotExpired);
         }
+
+        // Update custody event status
+        custody_event.status = CustodyStatus::Cancelled;
+        custody_events.set(event_id.clone(), custody_event.clone());
+        env.storage().persistent().set(&CUSTODY_EVENTS, &custody_events);
 
         let old_status = unit.status;
 
@@ -785,8 +908,8 @@ impl HealthChainContract {
 
         // Emit event
         env.events().publish(
-            (symbol_short!("blood"), symbol_short!("transfer_cancel")),
-            (unit_id, current_time),
+            (symbol_short!("custody"), symbol_short!("cancel")),
+            custody_event,
         );
 
         Ok(())
@@ -959,6 +1082,126 @@ impl HealthChainContract {
             .unwrap_or(Map::new(&env));
 
         hospitals.get(hospital_id).unwrap_or(false)
+    }
+
+    /// Helper: Derive deterministic event_id for custody transfers
+    /// Uses SHA256 hash of: unit_id + from_custodian + to_custodian + ledger_sequence
+    fn derive_event_id(
+        env: &Env,
+        unit_id: u64,
+        from_custodian: &Address,
+        to_custodian: &Address,
+    ) -> String {
+        use soroban_sdk::{Bytes, BytesN};
+        
+        let ledger_sequence = env.ledger().sequence();
+        
+        // Create input bytes for hashing
+        let mut input = Bytes::new(env);
+        
+        // Add unit_id (8 bytes)
+        for byte in unit_id.to_be_bytes().iter() {
+            input.push_back(*byte);
+        }
+        
+        // Add from_custodian as Val (8 bytes)
+        let from_val_u64: u64 = from_custodian.to_val().get_payload();
+        for byte in from_val_u64.to_be_bytes().iter() {
+            input.push_back(*byte);
+        }
+        
+        // Add to_custodian as Val (8 bytes)
+        let to_val_u64: u64 = to_custodian.to_val().get_payload();
+        for byte in to_val_u64.to_be_bytes().iter() {
+            input.push_back(*byte);
+        }
+        
+        // Add ledger_sequence (4 bytes)
+        for byte in ledger_sequence.to_be_bytes().iter() {
+            input.push_back(*byte);
+        }
+        
+        // Compute SHA256 hash
+        let hash: BytesN<32> = env.crypto().sha256(&input).into();
+        
+        // Convert hash to hex string
+        let hex_chars = b"0123456789abcdef";
+        let mut hex_array = [0u8; 64];
+        
+        for i in 0..32u32 {
+            let byte = hash.get(i).unwrap();
+            let high = (byte >> 4) & 0x0f;
+            let low = byte & 0x0f;
+            hex_array[(i * 2) as usize] = hex_chars[high as usize];
+            hex_array[(i * 2 + 1) as usize] = hex_chars[low as usize];
+        }
+        
+        String::from_bytes(env, &hex_array)
+    }
+
+    /// Public function to compute event_id for a given transfer
+    /// Callers can use this to compute the event_id needed for confirm_transfer and cancel_transfer
+    pub fn compute_event_id(
+        env: Env,
+        unit_id: u64,
+        from_custodian: Address,
+        to_custodian: Address,
+        ledger_sequence: u32,
+    ) -> String {
+        use soroban_sdk::{Bytes, BytesN};
+        
+        // Create input bytes for hashing
+        let mut input = Bytes::new(&env);
+        
+        // Add unit_id (8 bytes)
+        for byte in unit_id.to_be_bytes().iter() {
+            input.push_back(*byte);
+        }
+        
+        // Add from_custodian as Val (8 bytes)
+        let from_val_u64: u64 = from_custodian.to_val().get_payload();
+        for byte in from_val_u64.to_be_bytes().iter() {
+            input.push_back(*byte);
+        }
+        
+        // Add to_custodian as Val (8 bytes)
+        let to_val_u64: u64 = to_custodian.to_val().get_payload();
+        for byte in to_val_u64.to_be_bytes().iter() {
+            input.push_back(*byte);
+        }
+        
+        // Add ledger_sequence (4 bytes)
+        for byte in ledger_sequence.to_be_bytes().iter() {
+            input.push_back(*byte);
+        }
+        
+        // Compute SHA256 hash
+        let hash: BytesN<32> = env.crypto().sha256(&input).into();
+        
+        // Convert hash to hex string
+        let hex_chars = b"0123456789abcdef";
+        let mut hex_array = [0u8; 64];
+        
+        for i in 0..32u32 {
+            let byte = hash.get(i).unwrap();
+            let high = (byte >> 4) & 0x0f;
+            let low = byte & 0x0f;
+            hex_array[(i * 2) as usize] = hex_chars[high as usize];
+            hex_array[(i * 2 + 1) as usize] = hex_chars[low as usize];
+        }
+        
+        String::from_bytes(&env, &hex_array)
+    }
+
+    /// Get custody event by event_id
+    pub fn get_custody_event(env: Env, event_id: String) -> Result<CustodyEvent, Error> {
+        let custody_events: Map<String, CustodyEvent> = env
+            .storage()
+            .persistent()
+            .get(&CUSTODY_EVENTS)
+            .unwrap_or(Map::new(&env));
+
+        custody_events.get(event_id).ok_or(Error::UnitNotFound)
     }
 
     /// Create a blood request (hospital only)
@@ -3284,7 +3527,7 @@ mod test {
         bank: &Address,
         hospital: &Address,
         initiated_at: u64,
-    ) -> u64 {
+    ) -> (u64, String) {
         // Ensure deterministic time for registration + allocation.
         env.ledger().set_timestamp(initiated_at.saturating_sub(10));
 
@@ -3301,9 +3544,9 @@ mod test {
 
         // Initiate transfer at exact initiated_at.
         env.ledger().set_timestamp(initiated_at);
-        client.initiate_transfer(bank, &unit_id);
+        let event_id = client.initiate_transfer(bank, &unit_id);
 
-        unit_id
+        (unit_id, event_id)
     }
 
     #[test]
@@ -3317,12 +3560,12 @@ mod test {
         client.register_blood_bank(&bank);
 
         let initiated_at = 1_000_000u64;
-        let unit_id = setup_in_transit_unit(&env, &client, &bank, &hospital, initiated_at);
+        let (unit_id, event_id) = setup_in_transit_unit(&env, &client, &bank, &hospital, initiated_at);
 
         // At initiated_at + 1800 => cancellable
         env.ledger()
             .set_timestamp(initiated_at + TRANSFER_EXPIRY_SECONDS);
-        client.cancel_transfer(&bank, &unit_id);
+        client.cancel_transfer(&bank, &event_id);
 
         let unit = client.get_blood_unit(&unit_id);
         assert_eq!(unit.status, BloodStatus::Reserved);
@@ -3340,12 +3583,12 @@ mod test {
         client.register_blood_bank(&bank);
 
         let initiated_at = 1_000_000u64;
-        let unit_id = setup_in_transit_unit(&env, &client, &bank, &hospital, initiated_at);
+        let (_, event_id) = setup_in_transit_unit(&env, &client, &bank, &hospital, initiated_at);
 
         // At initiated_at + 1799 => NOT cancellable
         env.ledger()
             .set_timestamp(initiated_at + TRANSFER_EXPIRY_SECONDS - 1);
-        client.cancel_transfer(&bank, &unit_id);
+        client.cancel_transfer(&bank, &event_id);
     }
 
     #[test]
@@ -3358,12 +3601,12 @@ mod test {
         client.register_blood_bank(&bank);
 
         let initiated_at = 1_000_000u64;
-        let unit_id = setup_in_transit_unit(&env, &client, &bank, &hospital, initiated_at);
+        let (unit_id, event_id) = setup_in_transit_unit(&env, &client, &bank, &hospital, initiated_at);
 
         // At initiated_at + 1801 => cancellable
         env.ledger()
             .set_timestamp(initiated_at + TRANSFER_EXPIRY_SECONDS + 1);
-        client.cancel_transfer(&bank, &unit_id);
+        client.cancel_transfer(&bank, &event_id);
 
         let unit = client.get_blood_unit(&unit_id);
         assert_eq!(unit.status, BloodStatus::Reserved);
@@ -3379,12 +3622,12 @@ mod test {
         client.register_blood_bank(&bank);
 
         let initiated_at = 1_000_000u64;
-        let unit_id = setup_in_transit_unit(&env, &client, &bank, &hospital, initiated_at);
+        let (unit_id, event_id) = setup_in_transit_unit(&env, &client, &bank, &hospital, initiated_at);
 
         // At initiated_at + 1799 => confirm succeeds
         env.ledger()
             .set_timestamp(initiated_at + TRANSFER_EXPIRY_SECONDS - 1);
-        client.confirm_transfer(&hospital, &unit_id);
+        client.confirm_transfer(&hospital, &event_id);
 
         let unit = client.get_blood_unit(&unit_id);
         assert_eq!(unit.status, BloodStatus::Delivered);
@@ -3401,12 +3644,12 @@ mod test {
         client.register_blood_bank(&bank);
 
         let initiated_at = 1_000_000u64;
-        let unit_id = setup_in_transit_unit(&env, &client, &bank, &hospital, initiated_at);
+        let (_, event_id) = setup_in_transit_unit(&env, &client, &bank, &hospital, initiated_at);
 
         // At initiated_at + 1800 => confirm fails
         env.ledger()
             .set_timestamp(initiated_at + TRANSFER_EXPIRY_SECONDS);
-        client.confirm_transfer(&hospital, &unit_id);
+        client.confirm_transfer(&hospital, &event_id);
     }
 
     #[test]
@@ -3421,17 +3664,17 @@ mod test {
         let t1 = 1_000_000u64;
         let t2 = t1 + 100;
 
-        let unit_1 = setup_in_transit_unit(&env, &client, &bank, &hospital, t1);
-        let unit_2 = setup_in_transit_unit(&env, &client, &bank, &hospital, t2);
+        let (unit_1, event_id_1) = setup_in_transit_unit(&env, &client, &bank, &hospital, t1);
+        let (unit_2, event_id_2) = setup_in_transit_unit(&env, &client, &bank, &hospital, t2);
 
         // At t1 + 1800: transfer #1 expired, transfer #2 still within window.
         env.ledger().set_timestamp(t1 + TRANSFER_EXPIRY_SECONDS);
 
         // Unit 1 can be cancelled.
-        client.cancel_transfer(&bank, &unit_1);
+        client.cancel_transfer(&bank, &event_id_1);
 
         // Unit 2 can still be confirmed at the same ledger time.
-        client.confirm_transfer(&hospital, &unit_2);
+        client.confirm_transfer(&hospital, &event_id_2);
 
         let u1 = client.get_blood_unit(&unit_1);
         let u2 = client.get_blood_unit(&unit_2);
