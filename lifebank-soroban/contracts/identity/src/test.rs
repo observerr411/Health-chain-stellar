@@ -138,12 +138,12 @@ fn test_role_expiration() {
         li.timestamp = 2001;
     });
 
-    // Should not have role after expiration
+    // Should not have role after expiration (and this triggers lazy deletion)
     assert!(!client.has_role(&address, &Role::Donor));
 
-    // But role should still be in get_roles (it returns all, including expired)
+    // After lazy deletion, the role should be removed from storage
     let roles = client.get_roles(&address);
-    assert_eq!(roles.len(), 1);
+    assert_eq!(roles.len(), 0, "Expired role should be removed via lazy deletion");
 }
 
 #[test]
@@ -292,4 +292,250 @@ fn test_role_grant_metadata() {
     assert_eq!(grant.role, Role::Hospital);
     assert_eq!(grant.granted_at, 5000);
     assert_eq!(grant.expires_at, Some(10000));
+}
+
+#[test]
+fn test_lazy_deletion_in_has_role() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register(AccessControlContract, ());
+    let client = AccessControlContractClient::new(&env, &contract_id);
+
+    let address = Address::generate(&env);
+
+    // Set ledger timestamp
+    env.ledger().with_mut(|li| {
+        li.timestamp = 1000;
+    });
+
+    // Grant role that expires at 2000
+    client.grant_role(&address, &Role::Donor, &Some(2000));
+
+    // Verify role exists in storage
+    let roles_before = client.get_roles(&address);
+    assert_eq!(roles_before.len(), 1);
+
+    // Move time forward past expiration
+    env.ledger().with_mut(|li| {
+        li.timestamp = 2001;
+    });
+
+    // Call has_role - should return false AND delete the expired role
+    assert!(!client.has_role(&address, &Role::Donor));
+
+    // Verify the expired role was deleted from storage (lazy deletion)
+    let roles_after = client.get_roles(&address);
+    assert_eq!(roles_after.len(), 0, "Expired role should be deleted from storage");
+}
+
+#[test]
+fn test_lazy_deletion_preserves_other_roles() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register(AccessControlContract, ());
+    let client = AccessControlContractClient::new(&env, &contract_id);
+
+    let address = Address::generate(&env);
+
+    // Set ledger timestamp
+    env.ledger().with_mut(|li| {
+        li.timestamp = 1000;
+    });
+
+    // Grant multiple roles - one expires, one doesn't
+    client.grant_role(&address, &Role::Donor, &Some(2000)); // expires
+    client.grant_role(&address, &Role::Admin, &None); // never expires
+
+    // Move time forward past expiration
+    env.ledger().with_mut(|li| {
+        li.timestamp = 2001;
+    });
+
+    // Check the expired role - should trigger lazy deletion
+    assert!(!client.has_role(&address, &Role::Donor));
+
+    // Verify only the expired role was removed
+    let roles = client.get_roles(&address);
+    assert_eq!(roles.len(), 1);
+    assert_eq!(roles.get(0).unwrap().role, Role::Admin);
+
+    // Verify the non-expired role still works
+    assert!(client.has_role(&address, &Role::Admin));
+}
+
+#[test]
+fn test_cleanup_expired_roles_basic() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register(AccessControlContract, ());
+    let client = AccessControlContractClient::new(&env, &contract_id);
+
+    let address = Address::generate(&env);
+
+    // Set ledger timestamp
+    env.ledger().with_mut(|li| {
+        li.timestamp = 1000;
+    });
+
+    // Grant roles with different expiration times
+    client.grant_role(&address, &Role::Donor, &Some(2000));
+    client.grant_role(&address, &Role::Rider, &Some(3000));
+    client.grant_role(&address, &Role::Hospital, &None); // never expires
+
+    // Move time forward past some expiries
+    env.ledger().with_mut(|li| {
+        li.timestamp = 2500;
+    });
+
+    // Clean up expired roles
+    let removed = client.cleanup_expired_roles(&address);
+    assert_eq!(removed, 1, "Should have removed 1 expired role");
+
+    // Verify remaining roles
+    let roles = client.get_roles(&address);
+    assert_eq!(roles.len(), 2);
+    
+    // Verify correct roles remain
+    assert!(!client.has_role(&address, &Role::Donor)); // expired & removed
+    assert!(client.has_role(&address, &Role::Rider)); // not yet expired
+    assert!(client.has_role(&address, &Role::Hospital)); // never expires
+}
+
+#[test]
+fn test_cleanup_expired_roles_100_roles() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register(AccessControlContract, ());
+    let client = AccessControlContractClient::new(&env, &contract_id);
+
+    let address = Address::generate(&env);
+
+    // Set ledger timestamp
+    env.ledger().with_mut(|li| {
+        li.timestamp = 1000;
+    });
+
+    // Define the 5 available roles
+    let roles = [
+        Role::Admin,
+        Role::Hospital,
+        Role::Donor,
+        Role::Rider,
+        Role::BloodBank,
+    ];
+
+    // Grant 100 roles by cycling through available roles with different expiry times
+    for i in 0..100 {
+        let role = &roles[i % 5];
+        let expiry = 2000 + (i as u64 * 100); // Staggered expiry times
+        client.grant_role(&address, role, &Some(expiry));
+    }
+
+    // Verify roles were granted (since we cycle through 5 roles, we should have 5 unique roles)
+    let roles_before = client.get_roles(&address);
+    assert_eq!(roles_before.len(), 5, "Should have 5 unique roles");
+
+    // Move time forward past all expiries
+    env.ledger().with_mut(|li| {
+        li.timestamp = 20000; // Well past all expiry times
+    });
+
+    // Clean up all expired roles
+    let removed = client.cleanup_expired_roles(&address);
+    assert_eq!(removed, 5, "Should have removed all 5 expired roles");
+
+    // Verify storage is empty after cleanup
+    let roles_after = client.get_roles(&address);
+    assert_eq!(roles_after.len(), 0, "Storage should be completely empty after cleanup");
+
+    // Verify all roles return false
+    assert!(!client.has_role(&address, &Role::Admin));
+    assert!(!client.has_role(&address, &Role::Hospital));
+    assert!(!client.has_role(&address, &Role::Donor));
+    assert!(!client.has_role(&address, &Role::Rider));
+    assert!(!client.has_role(&address, &Role::BloodBank));
+}
+
+#[test]
+fn test_cleanup_expired_roles_removes_all_when_all_expired() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register(AccessControlContract, ());
+    let client = AccessControlContractClient::new(&env, &contract_id);
+
+    let address = Address::generate(&env);
+
+    // Set ledger timestamp
+    env.ledger().with_mut(|li| {
+        li.timestamp = 1000;
+    });
+
+    // Grant multiple roles, all with expiry
+    client.grant_role(&address, &Role::Admin, &Some(2000));
+    client.grant_role(&address, &Role::Hospital, &Some(2500));
+    client.grant_role(&address, &Role::Donor, &Some(3000));
+
+    // Verify roles exist
+    assert_eq!(client.get_roles(&address).len(), 3);
+
+    // Move time forward past all expiries
+    env.ledger().with_mut(|li| {
+        li.timestamp = 4000;
+    });
+
+    // Clean up all expired roles
+    let removed = client.cleanup_expired_roles(&address);
+    assert_eq!(removed, 3);
+
+    // Verify storage is completely empty
+    let roles = client.get_roles(&address);
+    assert_eq!(roles.len(), 0, "All expired roles should be removed");
+}
+
+#[test]
+fn test_cleanup_expired_roles_no_roles() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register(AccessControlContract, ());
+    let client = AccessControlContractClient::new(&env, &contract_id);
+
+    let address = Address::generate(&env);
+
+    // Try to cleanup when no roles exist
+    let removed = client.cleanup_expired_roles(&address);
+    assert_eq!(removed, 0, "Should return 0 when no roles exist");
+}
+
+#[test]
+fn test_cleanup_expired_roles_none_expired() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register(AccessControlContract, ());
+    let client = AccessControlContractClient::new(&env, &contract_id);
+
+    let address = Address::generate(&env);
+
+    // Set ledger timestamp
+    env.ledger().with_mut(|li| {
+        li.timestamp = 1000;
+    });
+
+    // Grant roles that haven't expired yet
+    client.grant_role(&address, &Role::Admin, &Some(5000));
+    client.grant_role(&address, &Role::Hospital, &None);
+
+    // Try cleanup before any expiry
+    let removed = client.cleanup_expired_roles(&address);
+    assert_eq!(removed, 0, "Should not remove any non-expired roles");
+
+    // Verify roles still exist
+    let roles = client.get_roles(&address);
+    assert_eq!(roles.len(), 2);
 }
