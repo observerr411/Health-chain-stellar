@@ -99,6 +99,10 @@ impl AccessControlContract {
     ///
     /// # Returns
     /// `true` if the address has the role and it hasn't expired, `false` otherwise
+    ///
+    /// # Implementation Note
+    /// This function implements lazy deletion: if it encounters an expired role grant,
+    /// it will remove that grant from storage before returning false.
     pub fn has_role(env: Env, address: Address, role: Role) -> bool {
         let key = DataKey::AddressRoles(address);
 
@@ -114,7 +118,17 @@ impl AccessControlContract {
                 if grant.role == role {
                     // Check if the role has expired
                     if let Some(expires_at) = grant.expires_at {
-                        return current_time < expires_at;
+                        if current_time >= expires_at {
+                            // Lazy deletion: remove the expired role from storage
+                            let new_roles = Self::remove_role_from_vec(&env, roles, &role);
+                            if new_roles.is_empty() {
+                                env.storage().persistent().remove(&key);
+                            } else {
+                                env.storage().persistent().set(&key, &new_roles);
+                            }
+                            return false;
+                        }
+                        return true;
                     }
                     return true;
                 }
@@ -137,6 +151,57 @@ impl AccessControlContract {
             .persistent()
             .get(&key)
             .unwrap_or(Vec::new(&env))
+    }
+
+    /// Clean up all expired role grants for an address
+    ///
+    /// This function proactively removes all expired role grants from storage for a given address.
+    /// It's useful for batch cleanup operations to reduce storage footprint.
+    ///
+    /// # Arguments
+    /// * `address` - The address to clean up expired roles for
+    ///
+    /// # Returns
+    /// The number of expired roles that were removed
+    pub fn cleanup_expired_roles(env: Env, address: Address) -> u32 {
+        let key = DataKey::AddressRoles(address);
+
+        if let Some(roles) = env
+            .storage()
+            .persistent()
+            .get::<DataKey, Vec<RoleGrant>>(&key)
+        {
+            let current_time = env.ledger().timestamp();
+            let mut new_roles = Vec::new(&env);
+            let mut removed_count = 0u32;
+
+            // Filter out expired roles
+            for i in 0..roles.len() {
+                let grant = roles.get(i).unwrap();
+                let is_expired = if let Some(expires_at) = grant.expires_at {
+                    current_time >= expires_at
+                } else {
+                    false
+                };
+
+                if is_expired {
+                    removed_count += 1;
+                } else {
+                    new_roles.push_back(grant);
+                }
+            }
+
+            // Update storage
+            if new_roles.is_empty() {
+                env.storage().persistent().remove(&key);
+            } else if removed_count > 0 {
+                env.storage().persistent().set(&key, &new_roles);
+            }
+
+            removed_count
+        } else {
+            0
+        }
     }
 
     /// Helper function to remove a role from a vector
