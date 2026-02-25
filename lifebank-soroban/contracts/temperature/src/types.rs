@@ -42,4 +42,8 @@ pub enum DataKey {
     Threshold(u64),
     TempPage(u64, u32),
     TempPageLen(u64, u32),
+    /// Tracks consecutive violation streak for a blood unit
+    ConsecutiveViolationStreak(u64),
+    /// Tracks if unit has been compromised (3+ consecutive violations)
+    IsCompromised(u64),
 }

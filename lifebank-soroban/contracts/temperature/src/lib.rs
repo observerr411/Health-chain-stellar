@@ -71,6 +71,24 @@ impl TemperatureContract {
             is_violation,
         };
 
+        // Update consecutive violation streak
+        let streak_key = DataKey::ConsecutiveViolationStreak(unit_id);
+        let current_streak: u32 = env.storage().persistent().get(&streak_key).unwrap_or(0);
+        
+        let new_streak = if is_violation {
+            current_streak.saturating_add(1)
+        } else {
+            0 // Reset streak on non-violation
+        };
+        
+        env.storage().persistent().set(&streak_key, &new_streak);
+        
+        // Check if unit should be compromised (3 consecutive violations)
+        if new_streak >= 3 {
+            let compromised_key = DataKey::IsCompromised(unit_id);
+            env.storage().persistent().set(&compromised_key, &true);
+        }
+
         let mut page_num: u32 = 0;
         let position: u32;
 
@@ -227,6 +245,59 @@ impl TemperatureContract {
             max_celsius_x100: max_temp,
             violation_count,
         })
+    }
+
+    /// Get the current consecutive violation streak for a blood unit
+    ///
+    /// # Arguments
+    /// * `unit_id` - The blood unit to check
+    ///
+    /// # Returns
+    /// Current consecutive violation count
+    pub fn get_consecutive_violation_streak(env: Env, unit_id: u64) -> u32 {
+        let streak_key = DataKey::ConsecutiveViolationStreak(unit_id);
+        env.storage().persistent().get(&streak_key).unwrap_or(0)
+    }
+
+    /// Check if a blood unit has been compromised due to consecutive violations
+    ///
+    /// # Arguments
+    /// * `unit_id` - The blood unit to check
+    ///
+    /// # Returns
+    /// `true` if unit has 3 or more consecutive violations (compromised), `false` otherwise
+    pub fn is_compromised(env: Env, unit_id: u64) -> bool {
+        let compromised_key = DataKey::IsCompromised(unit_id);
+        env.storage().persistent().get(&compromised_key).unwrap_or(false)
+    }
+
+    /// Reset the compromised status and violation streak for a blood unit (admin only)
+    ///
+    /// # Arguments
+    /// * `admin` - Admin address performing the reset
+    /// * `unit_id` - The blood unit to reset
+    ///
+    /// # Errors
+    /// - `Unauthorized`: Caller is not the admin
+    pub fn reset_compromised_status(
+        env: Env,
+        admin: Address,
+        unit_id: u64,
+    ) -> Result<(), ContractError> {
+        admin.require_auth();
+
+        let stored_admin = storage::get_admin(&env);
+        if admin != stored_admin {
+            return Err(ContractError::Unauthorized);
+        }
+
+        let streak_key = DataKey::ConsecutiveViolationStreak(unit_id);
+        let compromised_key = DataKey::IsCompromised(unit_id);
+
+        env.storage().persistent().set(&streak_key, &0u32);
+        env.storage().persistent().set(&compromised_key, &false);
+
+        Ok(())
     }
 }
 
@@ -542,5 +613,202 @@ mod tests {
 
         // Don't log any readings
         client.get_temperature_summary(&unit_id);
+    }
+
+    // ============================================================================
+    // Consecutive Violation Streak Tests
+    // ============================================================================
+
+    /// Test 1: Streak reset on non-violation
+    /// 2 violations → 1 normal → 2 violations → assert streak is 2 (not 4) and unit is not Compromised
+    #[test]
+    fn test_streak_reset_on_non_violation() {
+        let (_env, admin, client) = create_test_contract();
+
+        let unit_id = 200u64;
+        client.set_threshold(&admin, &unit_id, &200, &600);
+
+        // Log 2 violations
+        client.log_reading(&unit_id, &100, &1000); // violation 1
+        client.log_reading(&unit_id, &100, &1001); // violation 2
+
+        // Check streak is 2
+        assert_eq!(client.get_consecutive_violation_streak(&unit_id), 2);
+        assert!(!client.is_compromised(&unit_id));
+
+        // Log 1 normal reading (resets streak)
+        client.log_reading(&unit_id, &400, &1002); // normal
+
+        // Check streak was reset to 0
+        assert_eq!(client.get_consecutive_violation_streak(&unit_id), 0);
+
+        // Log 2 more violations
+        client.log_reading(&unit_id, &100, &1003); // violation 1
+        client.log_reading(&unit_id, &100, &1004); // violation 2
+
+        // Streak should be 2, not 4 (it was reset)
+        assert_eq!(client.get_consecutive_violation_streak(&unit_id), 2);
+        assert!(!client.is_compromised(&unit_id), "Unit should NOT be compromised with only 2 consecutive violations");
+    }
+
+    /// Test 2: Exact threshold - exactly 3 consecutive violations → assert Compromised triggered
+    #[test]
+    fn test_exact_threshold_triggers_compromised() {
+        let (_env, admin, client) = create_test_contract();
+
+        let unit_id = 201u64;
+        client.set_threshold(&admin, &unit_id, &200, &600);
+
+        // Log exactly 3 consecutive violations
+        client.log_reading(&unit_id, &100, &1000); // violation 1
+        assert_eq!(client.get_consecutive_violation_streak(&unit_id), 1);
+        assert!(!client.is_compromised(&unit_id));
+
+        client.log_reading(&unit_id, &100, &1001); // violation 2
+        assert_eq!(client.get_consecutive_violation_streak(&unit_id), 2);
+        assert!(!client.is_compromised(&unit_id));
+
+        client.log_reading(&unit_id, &100, &1002); // violation 3
+        assert_eq!(client.get_consecutive_violation_streak(&unit_id), 3);
+        assert!(client.is_compromised(&unit_id), "Unit should be compromised after 3 consecutive violations");
+    }
+
+    /// Test 3: Threshold not met
+    /// 2 consecutive → 1 normal → 2 consecutive → assert not Compromised
+    #[test]
+    fn test_threshold_not_met_not_compromised() {
+        let (_env, admin, client) = create_test_contract();
+
+        let unit_id = 202u64;
+        client.set_threshold(&admin, &unit_id, &200, &600);
+
+        // Log 2 consecutive violations
+        client.log_reading(&unit_id, &100, &1000);
+        client.log_reading(&unit_id, &100, &1001);
+        assert_eq!(client.get_consecutive_violation_streak(&unit_id), 2);
+
+        // Log 1 normal reading
+        client.log_reading(&unit_id, &400, &1002);
+        assert_eq!(client.get_consecutive_violation_streak(&unit_id), 0);
+
+        // Log 2 more consecutive violations
+        client.log_reading(&unit_id, &100, &1003);
+        client.log_reading(&unit_id, &100, &1004);
+        assert_eq!(client.get_consecutive_violation_streak(&unit_id), 2);
+
+        // Should NOT be compromised
+        assert!(!client.is_compromised(&unit_id), "Unit should NOT be compromised - never reached 3 consecutive");
+    }
+
+    /// Test 4: Streak after recovery
+    /// unit is Compromised → admin resets → 2 new violations → assert not Compromised again yet
+    #[test]
+    fn test_streak_after_recovery() {
+        let (_env, admin, client) = create_test_contract();
+
+        let unit_id = 203u64;
+        client.set_threshold(&admin, &unit_id, &200, &600);
+
+        // Trigger compromised status with 3 violations
+        client.log_reading(&unit_id, &100, &1000);
+        client.log_reading(&unit_id, &100, &1001);
+        client.log_reading(&unit_id, &100, &1002);
+        assert!(client.is_compromised(&unit_id));
+        assert_eq!(client.get_consecutive_violation_streak(&unit_id), 3);
+
+        // Admin resets the status
+        client.reset_compromised_status(&admin, &unit_id);
+        assert!(!client.is_compromised(&unit_id), "Should be reset after admin intervention");
+        assert_eq!(client.get_consecutive_violation_streak(&unit_id), 0, "Streak should be reset to 0");
+
+        // Log 2 new violations
+        client.log_reading(&unit_id, &100, &1003);
+        client.log_reading(&unit_id, &100, &1004);
+        assert_eq!(client.get_consecutive_violation_streak(&unit_id), 2);
+
+        // Should NOT be compromised again yet (only 2 violations)
+        assert!(!client.is_compromised(&unit_id), "Should not be compromised again with only 2 new violations");
+    }
+
+    /// Test 5: Single-reading unit
+    /// 1 violation → assert streak is 1, not Compromised
+    #[test]
+    fn test_single_reading_unit() {
+        let (_env, admin, client) = create_test_contract();
+
+        let unit_id = 204u64;
+        client.set_threshold(&admin, &unit_id, &200, &600);
+
+        // Log single violation
+        client.log_reading(&unit_id, &100, &1000);
+
+        // Check streak is 1
+        assert_eq!(client.get_consecutive_violation_streak(&unit_id), 1, "Streak should be 1 after single violation");
+
+        // Should NOT be compromised
+        assert!(!client.is_compromised(&unit_id), "Single violation should not compromise unit");
+    }
+
+    /// Test 6: Interleaved violations across custody transfers
+    /// violations logged by different custodians → streak is continuous across custodian changes
+    /// 
+    /// Note: This test demonstrates that the streak tracking is based on the blood unit itself,
+    /// not on who logs the reading. The custody transfer is simulated conceptually - in practice,
+    /// any authorized party can log temperature readings, and the streak counter persists.
+    #[test]
+    fn test_interleaved_violations_across_custody_transfers() {
+        let (_env, admin, client) = create_test_contract();
+
+        let unit_id = 205u64;
+        client.set_threshold(&admin, &unit_id, &200, &600);
+
+        // Custodian A logs violations (e.g., during initial storage)
+        client.log_reading(&unit_id, &100, &1000); // violation 1
+        client.log_reading(&unit_id, &100, &1001); // violation 2
+        assert_eq!(client.get_consecutive_violation_streak(&unit_id), 2);
+
+        // Simulate custody transfer (conceptually - same unit, different handler)
+        // Custodian B logs a violation (e.g., during transport)
+        client.log_reading(&unit_id, &700, &1002); // violation 3 (too hot)
+        
+        // Streak should be continuous across the conceptual custody change
+        assert_eq!(client.get_consecutive_violation_streak(&unit_id), 3);
+        assert!(client.is_compromised(&unit_id), "Unit should be compromised - violations span custody transfer");
+
+        // Custodian B logs a normal reading
+        client.log_reading(&unit_id, &400, &1003); // normal
+        
+        // Streak should reset even after custody transfer
+        assert_eq!(client.get_consecutive_violation_streak(&unit_id), 0);
+        
+        // Note: Unit remains compromised even after streak resets
+        // (once compromised, always compromised until admin reset)
+        assert!(client.is_compromised(&unit_id));
+    }
+
+    /// Test 7: Large streak
+    /// 100 consecutive violations → assert Compromised triggered on the 3rd and streak value is 100 at end
+    #[test]
+    fn test_large_streak() {
+        let (_env, admin, client) = create_test_contract();
+
+        let unit_id = 206u64;
+        client.set_threshold(&admin, &unit_id, &200, &600);
+
+        // Log 100 consecutive violations
+        for i in 0..100u64 {
+            client.log_reading(&unit_id, &100, &(1000 + i));
+            
+            // Check that compromised was triggered on the 3rd violation
+            if i == 2 {
+                assert!(client.is_compromised(&unit_id), "Should be compromised on 3rd consecutive violation");
+            }
+        }
+
+        // Final streak should be 100
+        assert_eq!(client.get_consecutive_violation_streak(&unit_id), 100, "Streak should be 100 after 100 consecutive violations");
+        
+        // Should definitely be compromised
+        assert!(client.is_compromised(&unit_id), "Unit should be compromised after 100 violations");
     }
 }

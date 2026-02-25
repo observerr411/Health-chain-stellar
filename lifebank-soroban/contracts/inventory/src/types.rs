@@ -34,6 +34,7 @@ pub enum BloodType {
 /// Status transitions follow this flow:
 /// Available -> Reserved -> InTransit -> Delivered
 ///           \-> Expired (can happen at any stage)
+///           \-> Compromised (temperature violations trigger this)
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq, Copy)]
 pub enum BloodStatus {
@@ -47,6 +48,8 @@ pub enum BloodStatus {
     Delivered,
     /// Expired and no longer usable (typically after 42 days for whole blood)
     Expired,
+    /// Compromised due to 3 consecutive temperature violations - unsafe for use
+    Compromised,
 }
 
 /// Complete blood unit record stored in the inventory contract
@@ -139,7 +142,10 @@ impl BloodType {
 impl BloodStatus {
     /// Check if this status is a terminal state
     pub fn is_terminal(&self) -> bool {
-        matches!(self, BloodStatus::Delivered | BloodStatus::Expired)
+        matches!(
+            self,
+            BloodStatus::Delivered | BloodStatus::Expired | BloodStatus::Compromised
+        )
     }
 }
 
