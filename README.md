@@ -50,22 +50,18 @@ All critical actions are enforced by smart contracts, reducing fraud and manual 
 
 ## Getting Started
 
-### For Contributors
+### Local Development Setup
+
+For contributors, we provide a Docker Compose stack for easy local development:
 
 ```bash
-# Clone repository
-git clone https://github.com/Christopherdominic/Health-chain-stellar.git
-cd Health-chain-stellar
-
-# Setup pre-commit hooks and dependencies
-./scripts/setup-hooks.sh
-
-# Start local development environment
+# Start Postgres + Redis
 docker-compose up -d
 
-# Start backend
+# Setup backend
 cd backend
+npm install
 npm run start:dev
 ```
 
-See [PRE_COMMIT_HOOKS.md](./PRE_COMMIT_HOOKS.md) for hook configuration and [DOCKER_SETUP.md](./DOCKER_SETUP.md) for detailed setup instructions.
+See [DOCKER_SETUP.md](./DOCKER_SETUP.md) for detailed instructions and optional development tools.
