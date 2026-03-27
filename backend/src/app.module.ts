@@ -1,4 +1,3 @@
-import { BullModule as BullClassicModule } from '@nestjs/bull';
 import { BullModule } from '@nestjs/bullmq';
 import { Module, MiddlewareConsumer, NestModule } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
@@ -108,21 +107,12 @@ import type Redis from 'ioredis';
         },
       }),
     }),
-    BullClassicModule.forRootAsync({
-      imports: [ConfigModule],
-      inject: [ConfigService],
-      useFactory: (configService: ConfigService) => ({
-        redis: {
-          host: configService.get<string>('REDIS_HOST', 'localhost'),
-          port: configService.get<number>('REDIS_PORT', 6379),
-        },
-      }),
-    }),
     NotificationsModule,
     BlockchainModule,
     OrganizationsModule,
     BloodRequestsModule,
     UserActivityModule,
+    EventsModule,
   ],
   controllers: [AppController],
   providers: [
