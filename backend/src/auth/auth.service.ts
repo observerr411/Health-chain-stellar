@@ -18,6 +18,8 @@ import Redis from 'ioredis';
 import { Repository } from 'typeorm';
 
 import { REDIS_CLIENT } from '../redis/redis.constants';
+import { RedisCircuitBreaker } from '../redis/redis-circuit-breaker';
+import { AuthSessionFallbackStore } from '../redis/auth-session-fallback.store';
 import { UserEntity } from '../users/entities/user.entity';
 import { ErrorCode } from '../common/errors/error-codes.enum';
 
@@ -31,6 +33,8 @@ const PASSWORD_HISTORY_LIMIT = 3;
 @Injectable()
 export class AuthService {
   private readonly logger = new Logger(AuthService.name);
+  private readonly circuitBreaker: RedisCircuitBreaker;
+  private readonly fallbackStore: AuthSessionFallbackStore;
 
   constructor(
     private readonly jwtService: JwtService,
@@ -38,7 +42,10 @@ export class AuthService {
     @Inject(REDIS_CLIENT) private readonly redis: Redis,
     @InjectRepository(UserEntity)
     private readonly userRepository: Repository<UserEntity>,
-  ) {}
+  ) {
+    this.circuitBreaker = new RedisCircuitBreaker();
+    this.fallbackStore = new AuthSessionFallbackStore();
+  }
 
   async validateUser(
     email: string,
@@ -161,13 +168,24 @@ export class AuthService {
         : this.getRefreshTokenExpirySeconds();
       const ttl = Math.max(expiresAt, 0);
 
-      // set(key, value, 'EX', ttl, 'NX') returns 'OK' if set, null if exists
-      const consumed = await this.redis.set(
-        tokenKey,
-        '1',
-        'EX',
-        ttl || 604800,
-        'NX',
+      // Use circuit breaker for Redis operation
+      const consumed = await this.circuitBreaker.execute(
+        async () => {
+          const result = await this.redis.set(
+            tokenKey,
+            '1',
+            'EX',
+            ttl || 604800,
+            'NX',
+          );
+          return result;
+        },
+        async () => {
+          // Fallback: use in-memory token tracking
+          return (await this.fallbackStore.markTokenConsumed(tokenKey))
+            ? 'OK'
+            : null;
+        },
       );
 
       if (!consumed) {
@@ -461,15 +479,30 @@ export class AuthService {
   ): Promise<void> {
     const now = Date.now();
     const expiresAt = new Date(now + ttlSeconds * 1000).toISOString();
-    await this.redis.hmset(this.sessionKey(sessionId), {
+    const sessionData = {
       userId: user.id,
       email: user.email,
       role: user.role ?? 'donor',
       createdAt: new Date(now).toISOString(),
       expiresAt,
-    });
-    await this.redis.expire(this.sessionKey(sessionId), ttlSeconds);
-    await this.redis.zadd(this.userSessionsKey(user.id), now, sessionId);
+    };
+
+    await this.circuitBreaker.execute(
+      async () => {
+        await this.redis.hmset(this.sessionKey(sessionId), sessionData);
+        await this.redis.expire(this.sessionKey(sessionId), ttlSeconds);
+        await this.redis.zadd(this.userSessionsKey(user.id), now, sessionId);
+      },
+      async () => {
+        // Fallback: use in-memory storage
+        await this.fallbackStore.setSession(
+          sessionId,
+          sessionData,
+          ttlSeconds,
+        );
+        await this.fallbackStore.addUserSession(user.id, sessionId);
+      },
+    );
   }
 
   private async touchSession(
@@ -478,23 +511,40 @@ export class AuthService {
     ttlSeconds: number,
   ): Promise<void> {
     const key = this.sessionKey(sessionId);
-    await this.redis.hset(
-      key,
-      'expiresAt',
-      new Date(Date.now() + ttlSeconds * 1000).toISOString(),
+    const expiresAt = new Date(Date.now() + ttlSeconds * 1000).toISOString();
+
+    await this.circuitBreaker.execute(
+      async () => {
+        await this.redis.hset(key, 'expiresAt', expiresAt);
+        await this.redis.expire(key, ttlSeconds);
+        await this.redis.zadd(this.userSessionsKey(userId), Date.now(), sessionId);
+      },
+      async () => {
+        // Fallback: update in-memory session
+        const session = await this.fallbackStore.getSession(sessionId);
+        if (session) {
+          session.expiresAt = expiresAt;
+        }
+      },
     );
-    await this.redis.expire(key, ttlSeconds);
-    await this.redis.zadd(this.userSessionsKey(userId), Date.now(), sessionId);
   }
 
   private async getSessionById(
     sessionId: string,
   ): Promise<Record<string, string> | null> {
-    const session = await this.redis.hgetall(this.sessionKey(sessionId));
-    if (!session || Object.keys(session).length === 0) {
-      return null;
-    }
-    return session;
+    return this.circuitBreaker.execute(
+      async () => {
+        const session = await this.redis.hgetall(this.sessionKey(sessionId));
+        if (!session || Object.keys(session).length === 0) {
+          return null;
+        }
+        return session;
+      },
+      async () => {
+        // Fallback: use in-memory storage
+        return this.fallbackStore.getSession(sessionId);
+      },
+    );
   }
 
   private async enforceConcurrentSessionLimit(userId: string): Promise<void> {
