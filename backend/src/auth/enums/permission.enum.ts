@@ -69,7 +69,5 @@ export enum Permission {
   // ── Admin ─────────────────────────────────────────────────────────────
   ADMIN_ACCESS = 'admin:access',
   MANAGE_ROLES = 'manage:roles',
-
-  // ── Disputes ──────────────────────────────────────────────────────────
-  EXPORT_DISPUTES = 'export:disputes',
+  READ_ANALYTICS = 'read:analytics',
 }
