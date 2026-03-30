@@ -54,6 +54,9 @@ const mockItemRepo = {
 };
 
 const mockInventoryService = {
+  findByBankAndBloodType: jest
+    .fn()
+    .mockResolvedValue({ availableUnits: 10, version: 1 }),
   reserveStockOrThrow: jest.fn().mockResolvedValue(undefined),
   releaseStockByBankAndType: jest.fn().mockResolvedValue(undefined),
 };
