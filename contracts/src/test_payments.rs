@@ -1,28 +1,19 @@
 #![cfg(test)]
 
 use crate::payments::{
-    Dispute, DisputeMetadata, DisputeStatus, EscrowAccount, FeeStructure, Payment, PaymentError,
-    PaymentStats, PaymentStatus, ReleaseConditions, TransactionMetadata,
-    DEFAULT_DISPUTE_TIMEOUT_SECS,
+    Dispute, DisputeMetadata, DisputeStatus, EscrowAccount, FeeStructure, MultiSigConfig, Payment,
+    PaymentError, PaymentStats, PaymentStatus, PendingApproval, ReleaseConditions,
+    TransactionMetadata, DEFAULT_DISPUTE_TIMEOUT_SECS, HIGH_VALUE_THRESHOLD,
 };
 use crate::{
-    HealthChainContract, HealthChainContractClient, DISPUTES, DISPUTE_METADATA, PAYMENTS,
-    PAYMENT_STATS,
+    HealthChainContract, HealthChainContractClient, ADMIN, DISPUTES, DISPUTE_METADATA,
+    MULTISIG_CONFIG, PAYMENTS, PAYMENT_STATS, PENDING_APPROVALS,
 };
 
 use soroban_sdk::{
     testutils::{Address as _, Ledger},
     vec, Address, Bytes, Env, Map, String, Symbol,
 };
-    EscrowAccount, FeeStructure, MultiSigConfig, Payment, PaymentError, PaymentStatus,
-    PendingApproval, ReleaseConditions, TransactionMetadata, HIGH_VALUE_THRESHOLD,
-};
-use crate::{
-    HealthChainContract, HealthChainContractClient, ADMIN, MULTISIG_CONFIG, PAYMENTS,
-    PENDING_APPROVALS,
-};
-
-use soroban_sdk::{testutils::Address as _, vec, Address, Bytes, Env, Map, String, Symbol};
 
 fn default_fee_structure(env: &Env) -> FeeStructure {
     FeeStructure {
@@ -574,6 +565,8 @@ fn no_refund_before_deadline() {
     });
 
     assert_eq!(client.process_expired_disputes(), 0);
+}
+
 #[test]
 fn multisig_config_validates_threshold_and_signers() {
     let env = Env::default();
@@ -655,7 +648,6 @@ fn low_value_release_keeps_single_admin_flow() {
     env.as_contract(&contract_id, || {
         let payments: Map<u64, Payment> = env.storage().persistent().get(&PAYMENTS).unwrap();
         let payment = payments.get(payment_id).unwrap();
-        assert_eq!(payment.status, PaymentStatus::Disputed);
         assert_eq!(payment.status, PaymentStatus::Completed);
         assert!(payment.escrow_released_at.is_some());
     });
@@ -689,6 +681,9 @@ fn manual_resolution_prevents_refund() {
     });
 
     assert_eq!(client.process_expired_disputes(), 0);
+}
+
+#[test]
 fn high_value_release_requires_threshold_votes_and_prevents_duplicates() {
     let env = Env::default();
     env.mock_all_auths();
@@ -735,7 +730,7 @@ fn high_value_release_requires_threshold_votes_and_prevents_duplicates() {
         let payment = payments.get(payment_id).unwrap();
         assert_eq!(payment.status, PaymentStatus::Completed);
 
-        let stats: PaymentStats = env.storage().persistent().get(&PAYMENT_STATS).unwrap();
+        let stats: PaymentStats = env.storage().persistent().get(&PAYMENT_STATS).unwrap_or(PaymentStats::new());
         assert_eq!(stats.count_auto_refunded, 0);
         assert_eq!(stats.total_auto_refunded, 0);
         let approvals: Map<u64, PendingApproval> =
@@ -759,6 +754,9 @@ fn non_disputed_payments_are_ignored() {
     let _payment_id = client.create_payment(&1, &payer, &payee, &1_500, &asset);
     assert_eq!(client.process_expired_disputes(), 0);
     assert_eq!(client.get_payment_stats(), PaymentStats::new());
+}
+
+#[test]
 fn configure_multisig_is_admin_only_and_persists_storage() {
     let env = Env::default();
     env.mock_all_auths();

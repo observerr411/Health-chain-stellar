@@ -1,6 +1,6 @@
 {
   "generators": {
-    "address": 6,
+    "address": 3,
     "nonce": 0
   },
   "auth": [
@@ -31,10 +31,10 @@
           "function": {
             "contract_fn": {
               "contract_address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM",
-              "function_name": "set_dispute_timeout",
+              "function_name": "register_blood_bank",
               "args": [
                 {
-                  "u64": 10
+                  "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M"
                 }
               ]
             }
@@ -50,57 +50,33 @@
           "function": {
             "contract_fn": {
               "contract_address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM",
-              "function_name": "create_payment",
+              "function_name": "register_blood",
               "args": [
-                {
-                  "u64": 1
-                },
                 {
                   "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M"
                 },
                 {
-                  "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAITA4"
+                  "vec": [
+                    {
+                      "symbol": "BNegative"
+                    }
+                  ]
                 },
                 {
-                  "i128": {
-                    "hi": 0,
-                    "lo": 2000
-                  }
+                  "vec": [
+                    {
+                      "symbol": "WholeBlood"
+                    }
+                  ]
                 },
                 {
-                  "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAK3IM"
-                }
-              ]
-            }
-          },
-          "sub_invocations": []
-        }
-      ]
-    ],
-    [],
-    [
-      [
-        "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMDR4",
-        {
-          "function": {
-            "contract_fn": {
-              "contract_address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM",
-              "function_name": "raise_dispute",
-              "args": [
-                {
-                  "u64": 1
+                  "u32": 400
                 },
                 {
-                  "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMDR4"
+                  "u64": 2160000
                 },
                 {
-                  "string": "waiting_case"
-                },
-                {
-                  "bytes": "0202020202020202020202020202020202020202020202020202020202020202"
-                },
-                {
-                  "vec": []
+                  "symbol": "DONOR42"
                 }
               ]
             }
@@ -114,7 +90,7 @@
   "ledger": {
     "protocol_version": 22,
     "sequence_number": 0,
-    "timestamp": 9,
+    "timestamp": 0,
     "network_id": "0000000000000000000000000000000000000000000000000000000000000000",
     "base_reserve": 0,
     "min_persistent_entry_ttl": 4096,
@@ -126,7 +102,7 @@
           "contract_data": {
             "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM",
             "key": {
-              "symbol": "DISP_META"
+              "symbol": "BANKS"
             },
             "durability": "persistent"
           }
@@ -139,34 +115,17 @@
                 "ext": "v0",
                 "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM",
                 "key": {
-                  "symbol": "DISP_META"
+                  "symbol": "BANKS"
                 },
                 "durability": "persistent",
                 "val": {
                   "map": [
                     {
                       "key": {
-                        "u64": 1
+                        "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M"
                       },
                       "val": {
-                        "map": [
-                          {
-                            "key": {
-                              "symbol": "dispute_deadline"
-                            },
-                            "val": {
-                              "u64": 10
-                            }
-                          },
-                          {
-                            "key": {
-                              "symbol": "dispute_id"
-                            },
-                            "val": {
-                              "u64": 1
-                            }
-                          }
-                        ]
+                        "bool": true
                       }
                     }
                   ]
@@ -183,7 +142,7 @@
           "contract_data": {
             "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM",
             "key": {
-              "symbol": "DISP_REC"
+              "symbol": "NEXT_ID"
             },
             "durability": "persistent"
           }
@@ -196,95 +155,11 @@
                 "ext": "v0",
                 "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM",
                 "key": {
-                  "symbol": "DISP_REC"
+                  "symbol": "NEXT_ID"
                 },
                 "durability": "persistent",
                 "val": {
-                  "map": [
-                    {
-                      "key": {
-                        "u64": 1
-                      },
-                      "val": {
-                        "map": [
-                          {
-                            "key": {
-                              "symbol": "evidence_digest"
-                            },
-                            "val": {
-                              "bytes": "0202020202020202020202020202020202020202020202020202020202020202"
-                            }
-                          },
-                          {
-                            "key": {
-                              "symbol": "evidence_ref_chunks"
-                            },
-                            "val": {
-                              "vec": []
-                            }
-                          },
-                          {
-                            "key": {
-                              "symbol": "id"
-                            },
-                            "val": {
-                              "u64": 1
-                            }
-                          },
-                          {
-                            "key": {
-                              "symbol": "payment_id"
-                            },
-                            "val": {
-                              "u64": 1
-                            }
-                          },
-                          {
-                            "key": {
-                              "symbol": "raised_at"
-                            },
-                            "val": {
-                              "u64": 0
-                            }
-                          },
-                          {
-                            "key": {
-                              "symbol": "raised_by"
-                            },
-                            "val": {
-                              "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMDR4"
-                            }
-                          },
-                          {
-                            "key": {
-                              "symbol": "reason"
-                            },
-                            "val": {
-                              "string": "waiting_case"
-                            }
-                          },
-                          {
-                            "key": {
-                              "symbol": "resolved_at"
-                            },
-                            "val": "void"
-                          },
-                          {
-                            "key": {
-                              "symbol": "status"
-                            },
-                            "val": {
-                              "vec": [
-                                {
-                                  "symbol": "Open"
-                                }
-                              ]
-                            }
-                          }
-                        ]
-                      }
-                    }
-                  ]
+                  "u64": 2
                 }
               }
             },
@@ -298,7 +173,7 @@
           "contract_data": {
             "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM",
             "key": {
-              "symbol": "PAY_RECS"
+              "symbol": "UNITS"
             },
             "durability": "persistent"
           }
@@ -311,7 +186,7 @@
                 "ext": "v0",
                 "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM",
                 "key": {
-                  "symbol": "PAY_RECS"
+                  "symbol": "UNITS"
                 },
                 "durability": "persistent",
                 "val": {
@@ -324,109 +199,13 @@
                         "map": [
                           {
                             "key": {
-                              "symbol": "amount"
-                            },
-                            "val": {
-                              "i128": {
-                                "hi": 0,
-                                "lo": 2000
-                              }
-                            }
-                          },
-                          {
-                            "key": {
-                              "symbol": "asset"
-                            },
-                            "val": {
-                              "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAK3IM"
-                            }
-                          },
-                          {
-                            "key": {
-                              "symbol": "escrow_released_at"
+                              "symbol": "allocation_timestamp"
                             },
                             "val": "void"
                           },
                           {
                             "key": {
-                              "symbol": "fee_structure"
-                            },
-                            "val": {
-                              "map": [
-                                {
-                                  "key": {
-                                    "symbol": "fixed_fee"
-                                  },
-                                  "val": {
-                                    "i128": {
-                                      "hi": 0,
-                                      "lo": 0
-                                    }
-                                  }
-                                },
-                                {
-                                  "key": {
-                                    "symbol": "network_fee"
-                                  },
-                                  "val": {
-                                    "i128": {
-                                      "hi": 0,
-                                      "lo": 0
-                                    }
-                                  }
-                                },
-                                {
-                                  "key": {
-                                    "symbol": "performance_bonus"
-                                  },
-                                  "val": {
-                                    "i128": {
-                                      "hi": 0,
-                                      "lo": 0
-                                    }
-                                  }
-                                },
-                                {
-                                  "key": {
-                                    "symbol": "policy_id"
-                                  },
-                                  "val": {
-                                    "symbol": "default_fee_policy"
-                                  }
-                                },
-                                {
-                                  "key": {
-                                    "symbol": "service_fee"
-                                  },
-                                  "val": {
-                                    "i128": {
-                                      "hi": 0,
-                                      "lo": 0
-                                    }
-                                  }
-                                }
-                              ]
-                            }
-                          },
-                          {
-                            "key": {
-                              "symbol": "id"
-                            },
-                            "val": {
-                              "u64": 1
-                            }
-                          },
-                          {
-                            "key": {
-                              "symbol": "payee"
-                            },
-                            "val": {
-                              "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAITA4"
-                            }
-                          },
-                          {
-                            "key": {
-                              "symbol": "payer"
+                              "symbol": "bank_id"
                             },
                             "val": {
                               "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M"
@@ -434,10 +213,86 @@
                           },
                           {
                             "key": {
-                              "symbol": "request_id"
+                              "symbol": "blood_type"
+                            },
+                            "val": {
+                              "vec": [
+                                {
+                                  "symbol": "BNegative"
+                                }
+                              ]
+                            }
+                          },
+                          {
+                            "key": {
+                              "symbol": "component"
+                            },
+                            "val": {
+                              "vec": [
+                                {
+                                  "symbol": "WholeBlood"
+                                }
+                              ]
+                            }
+                          },
+                          {
+                            "key": {
+                              "symbol": "delivery_timestamp"
+                            },
+                            "val": "void"
+                          },
+                          {
+                            "key": {
+                              "symbol": "donor_id"
+                            },
+                            "val": {
+                              "symbol": "DONOR42"
+                            }
+                          },
+                          {
+                            "key": {
+                              "symbol": "expiration_date"
+                            },
+                            "val": {
+                              "u64": 2160000
+                            }
+                          },
+                          {
+                            "key": {
+                              "symbol": "id"
                             },
                             "val": {
                               "u64": 1
+                            }
+                          },
+                          {
+                            "key": {
+                              "symbol": "location"
+                            },
+                            "val": {
+                              "symbol": "BANK"
+                            }
+                          },
+                          {
+                            "key": {
+                              "symbol": "quantity"
+                            },
+                            "val": {
+                              "u32": 400
+                            }
+                          },
+                          {
+                            "key": {
+                              "symbol": "recipient_hospital"
+                            },
+                            "val": "void"
+                          },
+                          {
+                            "key": {
+                              "symbol": "registration_timestamp"
+                            },
+                            "val": {
+                              "u64": 0
                             }
                           },
                           {
@@ -447,10 +302,16 @@
                             "val": {
                               "vec": [
                                 {
-                                  "symbol": "Disputed"
+                                  "symbol": "Available"
                                 }
                               ]
                             }
+                          },
+                          {
+                            "key": {
+                              "symbol": "transfer_timestamp"
+                            },
+                            "val": "void"
                           }
                         ]
                       }
@@ -469,7 +330,14 @@
           "contract_data": {
             "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM",
             "key": {
-              "symbol": "PAY_STATS"
+              "vec": [
+                {
+                  "symbol": "HISTORY"
+                },
+                {
+                  "u64": 1
+                }
+              ]
             },
             "durability": "persistent"
           }
@@ -482,29 +350,69 @@
                 "ext": "v0",
                 "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM",
                 "key": {
-                  "symbol": "PAY_STATS"
+                  "vec": [
+                    {
+                      "symbol": "HISTORY"
+                    },
+                    {
+                      "u64": 1
+                    }
+                  ]
                 },
                 "durability": "persistent",
                 "val": {
-                  "map": [
+                  "vec": [
                     {
-                      "key": {
-                        "symbol": "count_auto_refunded"
-                      },
-                      "val": {
-                        "u64": 0
-                      }
-                    },
-                    {
-                      "key": {
-                        "symbol": "total_auto_refunded"
-                      },
-                      "val": {
-                        "i128": {
-                          "hi": 0,
-                          "lo": 0
+                      "map": [
+                        {
+                          "key": {
+                            "symbol": "actor"
+                          },
+                          "val": {
+                            "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M"
+                          }
+                        },
+                        {
+                          "key": {
+                            "symbol": "blood_unit_id"
+                          },
+                          "val": {
+                            "u64": 1
+                          }
+                        },
+                        {
+                          "key": {
+                            "symbol": "new_status"
+                          },
+                          "val": {
+                            "vec": [
+                              {
+                                "symbol": "Available"
+                              }
+                            ]
+                          }
+                        },
+                        {
+                          "key": {
+                            "symbol": "old_status"
+                          },
+                          "val": {
+                            "vec": [
+                              {
+                                "symbol": "Available"
+                              }
+                            ]
+                          }
+                        },
+                        {
+                          "key": {
+                            "symbol": "timestamp"
+                          },
+                          "val": {
+                            "u64": 0
+                          }
                         }
-                      }
+                      ]
                     }
                   ]
                 }
@@ -544,30 +452,6 @@
                         },
                         "val": {
                           "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4"
-                        }
-                      },
-                      {
-                        "key": {
-                          "symbol": "DSP_TO"
-                        },
-                        "val": {
-                          "u64": 10
-                        }
-                      },
-                      {
-                        "key": {
-                          "symbol": "NDIS_ID"
-                        },
-                        "val": {
-                          "u64": 2
-                        }
-                      },
-                      {
-                        "key": {
-                          "symbol": "NPAY_ID"
-                        },
-                        "val": {
-                          "u64": 2
                         }
                       }
                     ]
@@ -668,39 +552,6 @@
                 "key": {
                   "ledger_key_nonce": {
                     "nonce": 1033654523790656264
-                  }
-                },
-                "durability": "temporary",
-                "val": "void"
-              }
-            },
-            "ext": "v0"
-          },
-          6311999
-        ]
-      ],
-      [
-        {
-          "contract_data": {
-            "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMDR4",
-            "key": {
-              "ledger_key_nonce": {
-                "nonce": 4837995959683129791
-              }
-            },
-            "durability": "temporary"
-          }
-        },
-        [
-          {
-            "last_modified_ledger_seq": 0,
-            "data": {
-              "contract_data": {
-                "ext": "v0",
-                "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMDR4",
-                "key": {
-                  "ledger_key_nonce": {
-                    "nonce": 4837995959683129791
                   }
                 },
                 "durability": "temporary",
