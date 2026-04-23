@@ -10,6 +10,7 @@ use crate::payments::*;
 
 pub mod registry_read;
 pub mod registry_write;
+pub mod storage_lifecycle;
 #[cfg(test)]
 mod test_payments;
 #[cfg(test)]
@@ -462,6 +463,13 @@ pub struct TrailMetadata {
     pub total_events: u32,
     pub total_pages: u32,
 }
+
+// Re-export storage lifecycle types for external consumers
+pub use storage_lifecycle::{
+    archive_custody_events, archive_unit_history, bump_all_registries, bump_rent_for_unit,
+    get_archived_custody_summary, get_archived_history_summary, is_custody_archived,
+    is_history_archived, ArchiveKey, ArchivedCustodySummary, ArchivedHistorySummary,
+};
 
 // Re-export constants for internal use
 pub(crate) use constants::{
@@ -3046,6 +3054,69 @@ impl HealthChainContract {
             .persistent()
             .get(&org_key)
             .ok_or(Error::OrganizationNotFound)
+    }
+}
+
+#[contractimpl]
+impl HealthChainContract {
+    // ── Storage Lifecycle / Rent Management ───────────────────────────────────
+
+    /// Extend the TTL of all shared registry maps (admin only).
+    ///
+    /// Call this periodically (e.g., monthly) to prevent rent expiry on the
+    /// large persistent maps that are the highest-risk keys for storage fees.
+    pub fn bump_registry_ttl(env: Env) -> Result<(), Error> {
+        let admin: Address = env
+            .storage()
+            .instance()
+            .get(&ADMIN)
+            .ok_or(Error::Unauthorized)?;
+        admin.require_auth();
+        storage_lifecycle::bump_all_registries(&env);
+        Ok(())
+    }
+
+    /// Compact the status-history for a terminal blood unit (permissionless).
+    ///
+    /// Replaces the full `Vec<StatusChangeEvent>` with an `ArchivedHistorySummary`
+    /// once the unit has been in a terminal state for at least 30 days, giving
+    /// off-chain indexers time to ingest all events before on-chain data is pruned.
+    ///
+    /// Returns `true` if archival was performed, `false` if not yet eligible.
+    pub fn archive_history(env: Env, unit_id: u64) -> Result<bool, Error> {
+        storage_lifecycle::archive_unit_history(&env, unit_id)
+    }
+
+    /// Prune finalized custody events for a terminal blood unit (permissionless).
+    ///
+    /// Removes individual `CustodyEvent` entries from the shared `CUSTODY_EVENTS`
+    /// map and stores a compact `ArchivedCustodySummary`. The `UnitTrailPage`
+    /// entries (event_id strings) are preserved for off-chain reconstruction.
+    ///
+    /// Returns `true` if pruning was performed, `false` if not yet eligible.
+    pub fn archive_custody(env: Env, unit_id: u64) -> Result<bool, Error> {
+        storage_lifecycle::archive_custody_events(&env, unit_id)
+    }
+
+    /// Retrieve the archived history summary for a unit.
+    ///
+    /// Returns `None` if the history has not been archived yet (full history
+    /// is still available via `get_transfer_history`).
+    pub fn get_history_summary(
+        env: Env,
+        unit_id: u64,
+    ) -> Option<ArchivedHistorySummary> {
+        storage_lifecycle::get_archived_history_summary(&env, unit_id)
+    }
+
+    /// Retrieve the archived custody summary for a unit.
+    ///
+    /// Returns `None` if custody events have not been archived yet.
+    pub fn get_custody_summary(
+        env: Env,
+        unit_id: u64,
+    ) -> Option<ArchivedCustodySummary> {
+        storage_lifecycle::get_archived_custody_summary(&env, unit_id)
     }
 }
 
