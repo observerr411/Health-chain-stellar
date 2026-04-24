@@ -1,4 +1,6 @@
 import { Module } from '@nestjs/common';
+import { ConfigModule } from '@nestjs/config';
+import { JwtModule } from '@nestjs/jwt';
 import { TypeOrmModule } from '@nestjs/typeorm';
 
 import { ApprovalModule } from '../approvals/approval.module';
@@ -22,6 +24,8 @@ import { OrderStateMachine } from './state-machine/order-state-machine';
 @Module({
   imports: [
     TypeOrmModule.forFeature([OrderEntity, OrderEventEntity, BlockchainEvent]),
+    ConfigModule,
+    JwtModule.register({}),
     InventoryModule,
     NotificationsModule,
     FeePolicyModule,
