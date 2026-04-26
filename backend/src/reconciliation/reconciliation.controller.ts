@@ -14,7 +14,7 @@ import { RequirePermissions } from '../auth/decorators/require-permissions.decor
 import { Permission } from '../auth/enums/permission.enum';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { PermissionsGuard } from '../auth/guards/permissions.guard';
-import { MismatchResolution } from './enums/reconciliation.enum';
+import { ExceptionCategory, MismatchResolution } from './enums/reconciliation.enum';
 import { ReconciliationService } from './reconciliation.service';
 
 @ApiTags('Reconciliation')
@@ -26,9 +26,16 @@ export class ReconciliationController {
 
   @Post('runs')
   @RequirePermissions(Permission.SETTLEMENT_RELEASE)
-  @ApiOperation({ summary: 'Trigger a reconciliation run' })
+  @ApiOperation({ summary: 'Trigger a new reconciliation run' })
   trigger(@User('id') userId: string) {
     return this.service.triggerRun(userId);
+  }
+
+  @Post('runs/:id/resume')
+  @RequirePermissions(Permission.SETTLEMENT_RELEASE)
+  @ApiOperation({ summary: 'Resume an interrupted reconciliation run from its last snapshot' })
+  resume(@Param('id') id: string, @User('id') userId: string) {
+    return this.service.triggerRun(userId, id);
   }
 
   @Get('runs')
@@ -40,13 +47,14 @@ export class ReconciliationController {
 
   @Get('mismatches')
   @RequirePermissions(Permission.READ_ANALYTICS)
-  @ApiOperation({ summary: 'List mismatches, optionally filtered by run or resolution' })
+  @ApiOperation({ summary: 'List mismatches, optionally filtered by run, resolution, or exception category' })
   getMismatches(
     @Query('runId') runId?: string,
     @Query('resolution') resolution?: MismatchResolution,
+    @Query('exceptionCategory') exceptionCategory?: ExceptionCategory,
     @Query('limit') limit?: string,
   ) {
-    return this.service.getMismatches(runId, resolution, limit ? parseInt(limit, 10) : 50);
+    return this.service.getMismatches(runId, resolution, exceptionCategory, limit ? parseInt(limit, 10) : 50);
   }
 
   @Post('mismatches/:id/resync')
@@ -65,5 +73,16 @@ export class ReconciliationController {
     @Body('note') note: string,
   ) {
     return this.service.dismiss(id, userId, note);
+  }
+
+  @Post('mismatches/:id/manual')
+  @RequirePermissions(Permission.SETTLEMENT_RELEASE)
+  @ApiOperation({ summary: 'Mark a mismatch as manually resolved' })
+  markManual(
+    @Param('id') id: string,
+    @User('id') userId: string,
+    @Body('note') note: string,
+  ) {
+    return this.service.markManual(id, userId, note);
   }
 }
