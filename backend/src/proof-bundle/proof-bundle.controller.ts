@@ -19,6 +19,12 @@ export class ProofBundleController {
     return this.service.releaseEscrow(id, releasedBy);
   }
 
+  /** Re-verify an existing bundle's manifest integrity (tamper detection) */
+  @Get(':id/verify')
+  verify(@Param('id') id: string) {
+    return this.service.verifyBundle(id);
+  }
+
   /** Get all proof bundles for a payment */
   @Get('payment/:paymentId')
   byPayment(@Param('paymentId') paymentId: string) {
